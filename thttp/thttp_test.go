@@ -69,3 +69,13 @@ func TestTHTTP_AutomaticTagBinding(t *testing.T) {
 		t.Errorf("expected Email from body, got %q", res.Email)
 	}
 }
+
+func TestTHTTP_NilOptionSafety(t *testing.T) {
+	t.Parallel()
+
+	// Should not panic when nil option is passed
+	server := thttp.New(":0", nil, nil)
+	if server == nil {
+		t.Fatal("expected non-nil server instance")
+	}
+}

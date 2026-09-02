@@ -62,7 +62,9 @@ func New(addr string, opts ...Option) *Transport {
 	}
 
 	for _, opt := range opts {
-		opt(t)
+		if opt != nil {
+			opt(t)
+		}
 	}
 	return t
 }

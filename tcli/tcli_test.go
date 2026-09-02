@@ -52,3 +52,13 @@ func TestTCLI_CommandRoutingAndFlagBinding(t *testing.T) {
 		t.Fatalf("positional files were not captured:\n%s", out)
 	}
 }
+
+func TestTCLI_NilOptionSafety(t *testing.T) {
+	t.Parallel()
+
+	// Should not panic when nil option is passed
+	cli := tcli.New(nil, nil)
+	if cli == nil {
+		t.Fatal("expected non-nil cli instance")
+	}
+}

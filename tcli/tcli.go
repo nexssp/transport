@@ -38,7 +38,9 @@ func New(opts ...Option) *Transport {
 		stderr: os.Stderr,
 	}
 	for _, opt := range opts {
-		opt(t)
+		if opt != nil {
+			opt(t)
+		}
 	}
 	return t
 }
