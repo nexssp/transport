@@ -1,7 +1,7 @@
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/nexssp/kernel v0.10.0 h1:WfwK0BtpysM1gntDT6/iFjlVdQzApiW9xBmvQ/Kset8=
-github.com/nexssp/kernel v0.10.0/go.mod h1:gLyh+67KWqJsj0YTMijJyfjh7NGN58pqjRmEdFd1VO0=
+github.com/nexssp/kernel v0.11.2 h1:uTT8dUAhtc15bkA53Ek+ZhfL/uGJ9BH1rw78QwW+LbE=
+github.com/nexssp/kernel v0.11.2/go.mod h1:gLyh+67KWqJsj0YTMijJyfjh7NGN58pqjRmEdFd1VO0=
 github.com/robfig/cron/v3 v3.0.1 h1:WdRxkvbJztn8LMz/QEvLN5sBU+xKpSqwwUO1Pjr4qDs=
 github.com/robfig/cron/v3 v3.0.1/go.mod h1:eQICP3HwyT7UooqI/z+Ov+PtYAWygg1TEWWzGIFLtro=
 golang.org/x/sync v0.23.0 h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=
