@@ -39,7 +39,7 @@ func TestBinder_AllDataTypes(t *testing.T) {
 
 	var captured ComprehensiveReq
 
-	testAct := action.New("test.alltypes", func(ctx context.Context, req ComprehensiveReq) (string, error) {
+	testAct := action.New("test.alltypes", func(_ context.Context, req ComprehensiveReq) (string, error) {
 		captured = req
 		return "ok", nil
 	}).Route(tcli.Command("types-test", "Test all types")).Build()
@@ -124,7 +124,7 @@ func TestBinder_PositionalStringFallback(t *testing.T) {
 	}
 
 	var captured TextReq
-	act := action.New("test.stringpos", func(ctx context.Context, req TextReq) (string, error) {
+	act := action.New("test.stringpos", func(_ context.Context, req TextReq) (string, error) {
 		captured = req
 		return "done", nil
 	}).Route(tcli.Command("echo", "Echo text")).Build()
@@ -154,7 +154,7 @@ func TestBinder_ValidationErrors(t *testing.T) {
 		Date   time.Time `cli:"date"`
 	}
 
-	act := action.New("test.strict", func(ctx context.Context, req StrictReq) (string, error) {
+	act := action.New("test.strict", func(_ context.Context, _ StrictReq) (string, error) {
 		return "ok", nil
 	}).Route(tcli.Command("strict", "Strict parsing")).Build()
 

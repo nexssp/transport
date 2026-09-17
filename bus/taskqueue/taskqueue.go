@@ -154,7 +154,7 @@ func (q *Queue) worker(ctx context.Context, ch <-chan Envelope, label string, id
 	for {
 		select {
 		case <-ctx.Done():
-			// Phase 2: Context cancelled — drain remaining messages non-blockingly
+			// Phase 2: Context canceled — drain remaining messages non-blockingly
 			for {
 				select {
 				case env := <-ch:
@@ -193,8 +193,15 @@ func (q *Queue) dispatch(ctx context.Context, env Envelope, log *slog.Logger) {
 		return
 	}
 
+	handler, ok := h.(Handler)
+	if !ok {
+		log.Error("handler_type_mismatch", "type", env.Type, "got", fmt.Sprintf("%T", h))
+		q.deadLetter(env, log)
+		return
+	}
+
 	start := time.Now()
-	err := h.(Handler)(ctx, env)
+	err := handler(ctx, env)
 	latency := time.Since(start)
 
 	if err == nil {
@@ -242,6 +249,8 @@ func (q *Queue) channel(p Priority) chan<- Envelope {
 		return q.high
 	case Low:
 		return q.low
+	case Normal:
+		return q.normal
 	default:
 		return q.normal
 	}

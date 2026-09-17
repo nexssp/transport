@@ -65,8 +65,8 @@ func methodSignature(m reflect.Method) string {
 		args = append(args, t.In(i).String())
 	}
 	outs := make([]string, 0, t.NumOut())
-	for i := 0; i < t.NumOut(); i++ {
-		outs = append(outs, t.Out(i).String())
+	for out := range t.Outs() {
+		outs = append(outs, out.String())
 	}
 	return fmt.Sprintf("func(%v) (%v)", args, outs)
 }

@@ -2,6 +2,7 @@ package tcli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -35,7 +36,7 @@ func AddDebugCommands() []action.AnyAction {
 
 		action.New("host-check", func(ctx context.Context, url string) (string, error) {
 			if url == "" {
-				return "", fmt.Errorf("target URL cannot be empty")
+				return "", errors.New("target URL cannot be empty")
 			}
 			c := &http.Client{Timeout: 5 * time.Second}
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)

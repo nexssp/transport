@@ -21,7 +21,7 @@ func TestTaskQueue_Success(t *testing.T) {
 	q, _ := taskqueue.New(taskqueue.Config{Name: "success"})
 	done := make(chan string, 1)
 
-	q.Register("send.email", func(ctx context.Context, env taskqueue.Envelope) error {
+	q.Register("send.email", func(_ context.Context, env taskqueue.Envelope) error {
 		var p EmailPayload
 		if err := json.Unmarshal(env.Payload, &p); err != nil {
 			return err
@@ -31,7 +31,7 @@ func TestTaskQueue_Success(t *testing.T) {
 	})
 
 	ctx := t.Context()
-	go q.Start(ctx)
+	go func() { _ = q.Start(ctx) }()
 
 	time.Sleep(50 * time.Millisecond) // let workers start
 
@@ -59,14 +59,14 @@ func TestTaskQueue_RetriesAndDLQ(t *testing.T) {
 	})
 
 	var attempts atomic.Int32
-	q.Register("fails", func(ctx context.Context, env taskqueue.Envelope) error {
+	q.Register("fails", func(_ context.Context, _ taskqueue.Envelope) error {
 		attempts.Add(1)
 		return errors.New("boom")
 	})
 
 	ctx := t.Context()
 
-	go q.Start(ctx)
+	go func() { _ = q.Start(ctx) }()
 	time.Sleep(100 * time.Millisecond)
 
 	if err := q.Enqueue(context.Background(), "fails", nil); err != nil {
@@ -90,14 +90,14 @@ func TestTaskQueue_PanicRecovery(t *testing.T) {
 	})
 
 	var attempts atomic.Int32
-	q.Register("panics", func(ctx context.Context, env taskqueue.Envelope) error {
+	q.Register("panics", func(_ context.Context, _ taskqueue.Envelope) error {
 		attempts.Add(1)
 		panic("sudden death")
 	})
 
 	ctx := t.Context()
 
-	go q.Start(ctx)
+	go func() { _ = q.Start(ctx) }()
 	time.Sleep(100 * time.Millisecond)
 
 	_ = q.Enqueue(context.Background(), "panics", nil)

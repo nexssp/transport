@@ -38,8 +38,8 @@ func Register[Req, Res any](m *Mediator, h func(context.Context, Req) (Res, erro
 }
 
 // Send dispatches a command to its registered handler.
-func Send[Req, Res any](m *Mediator, ctx context.Context, req Req) (Res, error) {
-	return bus.Send[Req, Res](m.commands, ctx, req)
+func Send[Req, Res any](ctx context.Context, m *Mediator, req Req) (Res, error) {
+	return bus.Send[Req, Res](ctx, m.commands, req)
 }
 
 // Subscribe registers a 1:N event handler.
@@ -56,7 +56,7 @@ func Subscribe[E any](m *Mediator, h func(context.Context, E) error) {
 }
 
 // Publish broadcasts an event to all subscribers.
-func Publish[E any](m *Mediator, ctx context.Context, event E) error {
+func Publish[E any](ctx context.Context, m *Mediator, event E) error {
 	return m.events.Publish(ctx, fmt.Sprintf("%T", event), event)
 }
 

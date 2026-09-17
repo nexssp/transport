@@ -24,7 +24,7 @@ type PackRes struct {
 func TestTCLI_CommandRoutingAndFlagBinding(t *testing.T) {
 	t.Parallel()
 
-	packAct := action.New("srcpack.pack", func(ctx context.Context, req PackReq) (PackRes, error) {
+	packAct := action.New("srcpack.pack", func(_ context.Context, req PackReq) (PackRes, error) {
 		return PackRes{
 			Status: "packed:" + req.Profile,
 			Files:  req.Files,
@@ -57,7 +57,7 @@ func TestTCLI_NilOptionSafety(t *testing.T) {
 	t.Parallel()
 
 	// Should not panic when nil option is passed
-	cli := tcli.New(nil, nil)
+	cli := tcli.New(nil)
 	if cli == nil {
 		t.Fatal("expected non-nil cli instance")
 	}

@@ -21,7 +21,7 @@ func TestTBus_SubscriptionAndZeroAllocDispatch(t *testing.T) {
 
 	var receivedUser string
 
-	act := action.New("user.created.listener", func(ctx context.Context, req UserCreatedEvent) (string, error) {
+	act := action.New("user.created.listener", func(_ context.Context, req UserCreatedEvent) (string, error) {
 		receivedUser = req.UserID
 		return "ok", nil
 	}).Route(tbus.Topic("user.created")).Build()

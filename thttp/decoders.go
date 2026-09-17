@@ -23,7 +23,7 @@ func (p *PathID[T]) FromHTTPRequest(r *http.Request) error {
 	}
 
 	target := reflect.ValueOf(&p.ID).Elem()
-	switch target.Kind() {
+	switch target.Kind() { //nolint:exhaustive // PathID only supports string and integer types
 	case reflect.String:
 		target.SetString(raw)
 
@@ -60,8 +60,8 @@ func (l *ListParams) FromHTTPRequest(r *http.Request) error {
 	q := r.URL.Query()
 	l.Search = q.Get("search")
 	l.Sort = q.Get("sort")
-	l.Limit, _ = strconv.Atoi(q.Get("limit"))
-	l.Page, _ = strconv.Atoi(q.Get("page"))
+	l.Limit, _ = strconv.Atoi(q.Get("limit")) //nolint:errcheck // invalid limit falls back to default below
+	l.Page, _ = strconv.Atoi(q.Get("page"))   //nolint:errcheck // invalid page falls back to default below
 
 	if l.Limit <= 0 {
 		l.Limit = 25

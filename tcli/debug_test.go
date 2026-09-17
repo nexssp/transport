@@ -20,7 +20,7 @@ func TestDebugCommands(t *testing.T) {
 	}
 
 	t.Run("Host Check against live test server", func(t *testing.T) {
-		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer ts.Close()
@@ -36,8 +36,12 @@ func TestDebugCommands(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected host-check error: %v", err)
 		}
-		if !strings.Contains(res.(string), "OK (HTTP 200)") {
-			t.Fatalf("expected 'OK (HTTP 200)', got %q", res)
+		got, ok := res.(string)
+		if !ok {
+			t.Fatalf("expected string result, got %T: %v", res, res)
+		}
+		if !strings.Contains(got, "OK (HTTP 200)") {
+			t.Fatalf("expected 'OK (HTTP 200)', got %q", got)
 		}
 	})
 }

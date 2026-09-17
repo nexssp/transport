@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"time"
 
 	"github.com/nexssp/kernel/action"
@@ -15,36 +14,49 @@ import (
 )
 
 const (
-	maxIdempotencyBodySize     = 10 << 20
-	idempotencyFinalizeTimeout = 5 * time.Second
+	maxIdempotencyBodySize            = 10 << 20
+	idempotencyFinalizeTimeout        = 5 * time.Second
+	defaultMaxIdempotentResponseBytes = 32 << 20 // 32 MiB
+
 )
 
 type capturedResponse struct {
-	status int
-	header http.Header
-	body   []byte
-	hash   string
+	status    int
+	header    http.Header
+	body      []byte
+	hash      string
+	truncated bool
 }
 
 func hashRequest(r *http.Request, cfg action.IdempotencyConfig, key string, body []byte) string {
 	h := sha256.New()
-	_, _ = io.WriteString(h, r.Method)
-	_, _ = io.WriteString(h, r.URL.Path)
+	_, _ = io.WriteString(h, r.Method)   //nolint:errcheck // hash.Hash.Write never returns error
+	_, _ = io.WriteString(h, r.URL.Path) //nolint:errcheck // hash.Hash.Write never returns error
 	_, _ = h.Write(body)
 	if cfg.KeyFunc != nil {
-		_, _ = io.WriteString(h, key)
+		_, _ = io.WriteString(h, key) //nolint:errcheck // hash.Hash.Write never returns error
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func withIdempotency(store action.IdempotencyStore, cfg action.IdempotencyConfig, next http.HandlerFunc) http.HandlerFunc {
+func withIdempotency(
+	store action.IdempotencyStore,
+	cfg action.IdempotencyConfig,
+	next http.HandlerFunc,
+	limit int,
+) http.HandlerFunc {
 	if coordinator, ok := store.(action.IdempotencyCoordinator); ok {
-		return withCoordinatedIdempotency(coordinator, cfg, next)
+		return withCoordinatedIdempotency(coordinator, cfg, next, limit)
 	}
-	return withLocalIdempotency(store, cfg, next)
+	return withLocalIdempotency(store, cfg, next, limit)
 }
 
-func withCoordinatedIdempotency(coordinator action.IdempotencyCoordinator, cfg action.IdempotencyConfig, next http.HandlerFunc) http.HandlerFunc {
+func withCoordinatedIdempotency(
+	coordinator action.IdempotencyCoordinator,
+	cfg action.IdempotencyConfig,
+	next http.HandlerFunc,
+	limit int,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, key, reqHash, apply := idempotencyRequest(w, r, cfg)
 		if !apply {
@@ -79,9 +91,9 @@ func withCoordinatedIdempotency(coordinator action.IdempotencyCoordinator, cfg a
 			return
 		}
 
-		captured := captureHTTPResponse(next, r, reqHash)
-		if captured.status < http.StatusOK || captured.status >= http.StatusMultipleChoices {
-			_ = coordinator.Release(r.Context(), key, claim.Token)
+		captured := captureHTTPResponse(next, r, reqHash, limit)
+		if captured.status < http.StatusOK || captured.status >= http.StatusMultipleChoices || captured.truncated {
+			_ = coordinator.Release(r.Context(), key, claim.Token) //nolint:errcheck // best-effort claim cleanup; original error already propagated
 			writeCapturedResponse(w, captured, false)
 			return
 		}
@@ -98,7 +110,12 @@ func withCoordinatedIdempotency(coordinator action.IdempotencyCoordinator, cfg a
 	}
 }
 
-func withLocalIdempotency(store action.IdempotencyStore, cfg action.IdempotencyConfig, next http.HandlerFunc) http.HandlerFunc {
+func withLocalIdempotency(
+	store action.IdempotencyStore,
+	cfg action.IdempotencyConfig,
+	next http.HandlerFunc,
+	limit int,
+) http.HandlerFunc {
 	var sf singleflight.Group
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, key, reqHash, apply := idempotencyRequest(w, r, cfg)
@@ -117,10 +134,12 @@ func withLocalIdempotency(store action.IdempotencyStore, cfg action.IdempotencyC
 		}
 
 		v, err, shared := sf.Do(key, func() (any, error) { //nolint:contextcheck // singleflight.Do has no context-aware callback; request context is propagated via closure.
-			captured := captureHTTPResponse(next, r, reqHash)
+			captured := captureHTTPResponse(next, r, reqHash, limit)
 
-			// Store atomically inside the flight before releasing waiting callers
-			if captured.status >= http.StatusOK && captured.status < http.StatusMultipleChoices {
+			// Store atomically inside the flight before releasing waiting callers.
+			// Oversized responses are never cached; the next identical request
+			// re-executes the handler.
+			if captured.status >= http.StatusOK && captured.status < http.StatusMultipleChoices && !captured.truncated {
 				store.Set(context.WithoutCancel(r.Context()), key, capturedEntry(captured), cfg.TTL)
 			}
 			return captured, nil
@@ -130,7 +149,7 @@ func withLocalIdempotency(store action.IdempotencyStore, cfg action.IdempotencyC
 			return
 		}
 
-		captured := v.(*capturedResponse)
+		captured := v.(*capturedResponse) //nolint:forcetypeassert // singleflight closure always returns *capturedResponse
 		if captured.hash != reqHash {
 			http.Error(w, `{"error":"idempotency key already used with a different request payload"}`, http.StatusUnprocessableEntity)
 			return
@@ -139,7 +158,11 @@ func withLocalIdempotency(store action.IdempotencyStore, cfg action.IdempotencyC
 	}
 }
 
-func idempotencyRequest(w http.ResponseWriter, r *http.Request, cfg action.IdempotencyConfig) ([]byte, string, string, bool) {
+func idempotencyRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	cfg action.IdempotencyConfig,
+) (body []byte, key, reqHash string, apply bool) {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
 		return nil, "", "", true
 	}
@@ -154,7 +177,7 @@ func idempotencyRequest(w http.ResponseWriter, r *http.Request, cfg action.Idemp
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 
-	key := r.Header.Get(cfg.Header())
+	key = r.Header.Get(cfg.Header())
 	if cfg.KeyFunc != nil {
 		if derived := cfg.KeyFunc(body); derived != "" {
 			key = derived
@@ -166,10 +189,36 @@ func idempotencyRequest(w http.ResponseWriter, r *http.Request, cfg action.Idemp
 	return body, key, hashRequest(r, cfg, key, body), true
 }
 
-func captureHTTPResponse(next http.HandlerFunc, r *http.Request, reqHash string) *capturedResponse {
-	rec := httptest.NewRecorder()
+func captureHTTPResponse(
+	next http.HandlerFunc,
+	r *http.Request,
+	reqHash string,
+	limit int,
+) *capturedResponse {
+	rec := acquireBufferedWriter(limit)
+	defer releaseBufferedWriter(rec)
+
 	next(rec, r)
-	return &capturedResponse{status: rec.Code, header: rec.Header(), body: rec.Body.Bytes(), hash: reqHash}
+
+	if rec.truncated {
+		return &capturedResponse{
+			status:    rec.status,
+			hash:      reqHash,
+			truncated: true,
+		}
+	}
+
+	header := make(http.Header, len(rec.header))
+	for k, vs := range rec.header {
+		header[k] = append([]string(nil), vs...)
+	}
+
+	return &capturedResponse{
+		status: rec.status,
+		header: header,
+		body:   append([]byte(nil), rec.body.Bytes()...),
+		hash:   reqHash,
+	}
 }
 
 func capturedEntry(captured *capturedResponse) action.IdempotencyEntry {
@@ -179,7 +228,13 @@ func capturedEntry(captured *capturedResponse) action.IdempotencyEntry {
 			headers[h] = v
 		}
 	}
-	return action.IdempotencyEntry{Status: captured.status, Body: captured.body, Headers: headers, StoredAt: time.Now().UTC(), RequestHash: captured.hash}
+	return action.IdempotencyEntry{
+		Status:      captured.status,
+		Body:        captured.body,
+		Headers:     headers,
+		StoredAt:    time.Now().UTC(),
+		RequestHash: captured.hash,
+	}
 }
 
 func writeIdempotencyReplay(w http.ResponseWriter, entry action.IdempotencyEntry, reqHash string) {
@@ -192,7 +247,7 @@ func writeIdempotencyReplay(w http.ResponseWriter, entry action.IdempotencyEntry
 	}
 	w.Header().Set("X-Idempotent-Replayed", "true")
 	w.WriteHeader(entry.Status)
-	_, _ = w.Write(entry.Body)
+	_, _ = w.Write(entry.Body) //nolint:errcheck // response write failure is terminal
 }
 
 func writeCapturedResponse(w http.ResponseWriter, captured *capturedResponse, replayed bool) {
@@ -205,5 +260,5 @@ func writeCapturedResponse(w http.ResponseWriter, captured *capturedResponse, re
 		w.Header().Set("X-Idempotent-Replayed", "true")
 	}
 	w.WriteHeader(captured.status)
-	_, _ = w.Write(captured.body)
+	_, _ = w.Write(captured.body) //nolint:errcheck // response write failure is terminal
 }

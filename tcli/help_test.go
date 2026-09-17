@@ -21,7 +21,7 @@ type HelpSampleReq struct {
 func TestHelp_RoutingAndFlagDiscovery(t *testing.T) {
 	t.Parallel()
 
-	testAct := action.New("user.create", func(ctx context.Context, req HelpSampleReq) (string, error) {
+	testAct := action.New("user.create", func(_ context.Context, _ HelpSampleReq) (string, error) {
 		return "ok", nil
 	}).
 		Description("Create a new user account").

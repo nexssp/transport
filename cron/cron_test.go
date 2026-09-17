@@ -15,7 +15,7 @@ func TestCronTransport_ScheduleExecution(t *testing.T) {
 
 	var callCount atomic.Int32
 
-	act := action.New("cron.job", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("cron.job", func(_ context.Context, _ struct{}) (string, error) {
 		callCount.Add(1)
 		return "ok", nil
 	}).Route(cron.Every(1 * time.Second)).Build()
@@ -25,7 +25,7 @@ func TestCronTransport_ScheduleExecution(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go tr.Do(ctx, nil)
+	go func() { _, _ = tr.Do(ctx, nil) }()
 
 	time.Sleep(1100 * time.Millisecond) // Allow 1s tick to fire
 	cancel()

@@ -11,7 +11,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xctx"
+	"github.com/nexssp/transport"
 )
+
+var _ transport.Transport = (*Transport)(nil)
 
 type Transport struct {
 	workers []*workerInstance
@@ -73,7 +76,7 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	// Block until context is canceled and all workers finish gracefully
 	<-ctx.Done()
 	t.wg.Wait()
-	return nil, nil
+	return nil, ctx.Err()
 }
 
 func (t *Transport) runWorker(ctx context.Context, w *workerInstance) {

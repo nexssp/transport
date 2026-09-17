@@ -30,7 +30,7 @@ func TestTBusDispatch_ZeroAlloc(t *testing.T) {
 	eventBus := bus.New[any]()
 	tr := tbus.New(eventBus)
 
-	act := action.New("bench.event", func(ctx context.Context, evt EventDTO) (EventDTO, error) {
+	act := action.New("bench.event", func(_ context.Context, evt EventDTO) (EventDTO, error) {
 		return evt, nil
 	}).Route(tbus.Topic("bench.topic")).Build()
 

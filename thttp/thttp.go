@@ -18,6 +18,8 @@ import (
 	"github.com/nexssp/transport/codec"
 )
 
+var _ transport.Transport = (*Transport)(nil)
+
 var payloadPool = sync.Pool{
 	New: func() any {
 		return bytes.NewBuffer(make([]byte, 0, 4096))
@@ -35,6 +37,7 @@ type Transport struct {
 	idemStore         action.IdempotencyStore
 	codec             codec.Codec
 	maxBodyBytes      int64
+	maxIdemRespBytes  int
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
 	writeTimeout      time.Duration
@@ -55,6 +58,7 @@ func New(addr string, opts ...Option) *Transport {
 		idemStore:         action.NewMemoryIdempotencyStore(0),
 		codec:             codec.Default,
 		maxBodyBytes:      10 << 20,
+		maxIdemRespBytes:  defaultMaxIdempotentResponseBytes,
 		readHeaderTimeout: 5 * time.Second,
 		readTimeout:       15 * time.Second,
 		writeTimeout:      30 * time.Second,
@@ -94,6 +98,14 @@ func WithBroadcaster(b StreamBroadcaster) Option {
 func WithReadTimeout(d time.Duration) Option  { return func(t *Transport) { t.readTimeout = d } }
 func WithWriteTimeout(d time.Duration) Option { return func(t *Transport) { t.writeTimeout = d } }
 
+func WithIdempotencyResponseLimit(limit int) Option {
+	return func(t *Transport) {
+		if limit >= 0 {
+			t.maxIdemRespBytes = limit
+		}
+	}
+}
+
 func (t *Transport) CanHandle(b action.Binding) bool {
 	switch b.(type) {
 	case HTTPRoute, SSERoute, RawHTTPHandler:
@@ -129,7 +141,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 				pattern := formatPattern(r.Method, r.Path)
 				h := t.httpHandler(ex, meta)
 				if meta != nil && meta.Idempotency.Enabled && t.idemStore != nil {
-					h = withIdempotency(t.idemStore, meta.Idempotency, h)
+					h = withIdempotency(t.idemStore, meta.Idempotency, h, t.maxIdemRespBytes)
 				}
 				t.mux.HandleFunc(pattern, h)
 			case SSERoute:
@@ -169,15 +181,16 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		<-ctx.Done()
 		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		_ = t.server.Shutdown(shutCtx)
+		_ = t.server.Shutdown(shutCtx) //nolint:errcheck // shutdown error is logged by caller if it matters
 	}()
 
 	if err := t.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return nil, fmt.Errorf("http server crash: %w", err)
 	}
-	return nil, nil
+	return nil, ctx.Err()
 }
 
+//nolint:gocyclo // HTTP handler; branches reflect request lifecycle (auth, decode, error, success) — no shared abstractions without churn
 func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -211,10 +224,13 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 			}
 
 			// Acquire buffer ONLY when reading actual body payload
-			buf := payloadPool.Get().(*bytes.Buffer)
+			buf, ok := payloadPool.Get().(*bytes.Buffer)
+			if !ok || buf == nil {
+				buf = bytes.NewBuffer(make([]byte, 0, 4096))
+			}
 			buf.Reset()
 			defer func() {
-				if buf.Cap() <= 64*1024 { // Ensure buffers larger than 64 KiB are released to GC rather than retained in `sync.Pool`.
+				if buf.Cap() <= 64*1024 {
 					payloadPool.Put(buf)
 				}
 			}()
@@ -241,7 +257,7 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 		if err != nil {
 			appErr := xerr.From(err)
 			w.WriteHeader(transport.MapToHTTPStatus(appErr.Kind))
-			_ = t.codec.NewEncoder(w).Encode(appErr.Public(reqID))
+			_ = t.codec.NewEncoder(w).Encode(appErr.Public(reqID)) //nolint:errcheck // response write failure is terminal
 			return
 		}
 
@@ -254,7 +270,7 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 		}
 
 		w.WriteHeader(status)
-		_ = t.codec.NewEncoder(w).Encode(res)
+		_ = t.codec.NewEncoder(w).Encode(res) //nolint:errcheck // response write failure is terminal
 	}
 }
 
@@ -270,12 +286,12 @@ func (t *Transport) sseHandler(channel string, broadcaster StreamBroadcaster) ht
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
 		w.Header().Set("X-Accel-Buffering", "no")
-		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Time{}) //nolint:errcheck // best-effort; not all ResponseWriters support it
 
 		ch, unsubscribe := broadcaster.Subscribe(channel)
 		defer unsubscribe()
 
-		_, _ = w.Write([]byte("event: connected\ndata: {\"status\":\"ready\"}\n\n"))
+		_, _ = w.Write([]byte("event: connected\ndata: {\"status\":\"ready\"}\n\n")) //nolint:errcheck // response write failure is terminal
 		flusher.Flush()
 
 		pingTicker := time.NewTicker(25 * time.Second)
@@ -286,13 +302,13 @@ func (t *Transport) sseHandler(channel string, broadcaster StreamBroadcaster) ht
 			case <-r.Context().Done():
 				return
 			case <-pingTicker.C:
-				_, _ = w.Write([]byte(": ping\n\n"))
+				_, _ = w.Write([]byte(": ping\n\n")) //nolint:errcheck // response write failure is terminal
 				flusher.Flush()
 			case payload, ok := <-ch:
 				if !ok {
 					return
 				}
-				_, _ = w.Write([]byte("event: message\ndata: " + string(payload) + "\n\n"))
+				_, _ = w.Write([]byte("event: message\ndata: " + string(payload) + "\n\n")) //nolint:errcheck // response write failure is terminal
 				flusher.Flush()
 			}
 		}

@@ -72,7 +72,7 @@ func main() {
 			case <-ticker.C:
 				data, _ := json.Marshal(map[string]any{
 					"time":  time.Now().Format(time.RFC3339),
-					"value": rand.IntN(100),
+					"value": rand.IntN(100), //nolint:gosec // demo dashboard metric, not a security decision
 				})
 				broadcaster.Publish("dashboard", data)
 			}

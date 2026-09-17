@@ -89,32 +89,25 @@ func (t *Transport) positionalUsage(payload any) string {
 	}
 
 	val := reflect.ValueOf(payload)
-
 	if val.Kind() == reflect.Pointer {
 		if val.IsNil() {
 			return ""
 		}
 		val = val.Elem()
 	}
-
 	if val.Kind() != reflect.Struct {
 		return ""
 	}
 
-	typ := val.Type()
-
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
+	for field := range val.Type().Fields() {
 		cliTag := field.Tag.Get("cli")
-
-		if !strings.Contains(cliTag, "positional") &&
-			!strings.Contains(cliTag, "args") {
+		if !strings.Contains(cliTag, "positional") && !strings.Contains(cliTag, "args") {
 			continue
 		}
 
 		label := strings.ToLower(field.Name)
 
-		switch field.Type.Kind() {
+		switch field.Type.Kind() { //nolint:exhaustive // only Slice and String produce positional usage
 		case reflect.Slice:
 			if field.Type.Elem().Kind() == reflect.String {
 				return " [" + label + "...]"
@@ -136,72 +129,80 @@ func (t *Transport) printStructFlags(payload any) {
 	if val.Kind() == reflect.Pointer {
 		val = val.Elem()
 	}
-
 	if val.Kind() != reflect.Struct {
 		return
 	}
 
-	typ := val.Type()
-	var flags []string
-
-	for i := 0; i < typ.NumField(); i++ {
-		field := typ.Field(i)
-		cliTag := field.Tag.Get("cli")
-		usageTag := field.Tag.Get("usage")
-
-		if cliTag == "" ||
-			strings.Contains(cliTag, "positional") ||
-			strings.Contains(cliTag, "args") {
-			continue
-		}
-
-		parts := strings.Split(cliTag, ",")
-
-		var formattedParts []string
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-
-			if len(p) == 1 {
-				formattedParts = append(formattedParts, "-"+p)
-			} else {
-				formattedParts = append(formattedParts, "--"+p)
-			}
-		}
-
-		flagFormatted := strings.Join(formattedParts, ", ")
-
-		typeHint := ""
-
-		if field.Type == reflect.TypeOf(time.Time{}) {
-			typeHint = " <time>"
-		} else {
-			switch field.Type.Kind() {
-			case reflect.String:
-				typeHint = " <string>"
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				typeHint = " <int>"
-			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				typeHint = " <uint>"
-			case reflect.Float32, reflect.Float64:
-				typeHint = " <float>"
-			case reflect.Slice:
-				typeHint = " <paths...>"
-			case reflect.Bool:
-				typeHint = ""
-			}
-		}
-
-		if usageTag != "" {
-			flags = append(flags, fmt.Sprintf("  %-32s %s", flagFormatted+typeHint, usageTag))
-		} else {
-			flags = append(flags, fmt.Sprintf("  %-32s", flagFormatted+typeHint))
-		}
-	}
-
+	flags := collectFlags(val.Type())
 	if len(flags) > 0 {
 		fmt.Fprintf(t.stderr, "\nFlags:\n%s\n", strings.Join(flags, "\n"))
+	}
+}
+
+func collectFlags(typ reflect.Type) []string {
+	var flags []string
+	for field := range typ.Fields() {
+		if !isFlagField(field) {
+			continue
+		}
+		flags = append(flags, formatFlag(field))
+	}
+	return flags
+}
+
+func isFlagField(field reflect.StructField) bool {
+	cliTag := field.Tag.Get("cli")
+	return cliTag != "" &&
+		!strings.Contains(cliTag, "positional") &&
+		!strings.Contains(cliTag, "args")
+}
+
+func formatFlag(field reflect.StructField) string {
+	names := formatFlagNames(field.Tag.Get("cli"))
+	hint := flagTypeHint(field.Type)
+	usage := field.Tag.Get("usage")
+
+	if usage != "" {
+		return fmt.Sprintf("  %-32s %s", names+hint, usage)
+	}
+	return fmt.Sprintf("  %-32s", names+hint)
+}
+
+func formatFlagNames(cliTag string) string {
+	parts := strings.Split(cliTag, ",")
+	formatted := make([]string, 0, len(parts))
+
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if len(p) == 1 {
+			formatted = append(formatted, "-"+p)
+		} else {
+			formatted = append(formatted, "--"+p)
+		}
+	}
+	return strings.Join(formatted, ", ")
+}
+
+func flagTypeHint(t reflect.Type) string {
+	if t == reflect.TypeFor[time.Time]() {
+		return " <time>"
+	}
+
+	switch t.Kind() { //nolint:exhaustive // only printable kinds are enumerated; others produce no type hint
+	case reflect.String:
+		return " <string>"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return " <int>"
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return " <uint>"
+	case reflect.Float32, reflect.Float64:
+		return " <float>"
+	case reflect.Slice:
+		return " <paths...>"
+	default:
+		return ""
 	}
 }

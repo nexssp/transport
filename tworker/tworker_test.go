@@ -15,7 +15,7 @@ func TestTransport_WorkerExecution(t *testing.T) {
 
 	var counter atomic.Int32
 
-	act := action.New("test.worker", func(ctx context.Context, _ struct{}) (string, error) {
+	act := action.New("test.worker", func(_ context.Context, _ struct{}) (string, error) {
 		counter.Add(1)
 		return "ok", nil
 	}).Route(tworker.Every(10 * time.Millisecond)).Build()
@@ -26,7 +26,7 @@ func TestTransport_WorkerExecution(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Start transport in background
-	go tr.Do(ctx, nil)
+	go func() { _, _ = tr.Do(ctx, nil) }()
 
 	// Wait enough time for a few intervals to fire
 	time.Sleep(50 * time.Millisecond)

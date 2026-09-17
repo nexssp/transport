@@ -8,8 +8,11 @@ import (
 	"sync"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/bus"
 )
+
+var _ transport.Transport = (*Transport)(nil)
 
 var decoderPool = sync.Pool{
 	New: func() any {
@@ -26,7 +29,7 @@ type payloadDecoder struct {
 
 // Decode fills the target provided by action.ExecuteDecoded.
 //
-// Kernel behaviour:
+// Kernel behavior:
 //   - value Req  → decode receives *Req
 //   - pointer Req → decode receives Req (already a *T from reflect.New)
 //
@@ -89,7 +92,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 		for _, b := range act.GetBindings() {
 			if tb, ok := b.(TopicBinding); ok {
 				t.eventBus.Subscribe(tb.Topic, func(ctx context.Context, payload any) error {
-					d := decoderPool.Get().(*payloadDecoder)
+					d := decoderPool.Get().(*payloadDecoder) //nolint:forcetypeassert // decoderPool.New always returns *payloadDecoder
 					d.payload = payload
 
 					_, err := ex.ExecuteDecoded(ctx, d.decode)
@@ -103,10 +106,12 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 	}
 }
 
-// Do implements the Transport interface. It just blocks since the bus is in-memory.
+// Do implements the Transport interface. It blocks until ctx is canceled,
+// then returns ctx.Err() so callers can distinguish clean shutdown from
+// a crash.
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	<-ctx.Done()
-	return nil, nil
+	return nil, ctx.Err()
 }
 
 // Publish is a convenience wrapper to emit events to the internal bus.

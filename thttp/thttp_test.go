@@ -29,7 +29,7 @@ type UserRes struct {
 func TestTHTTP_AutomaticTagBinding(t *testing.T) {
 	t.Parallel()
 
-	act := action.New("user.update", func(ctx context.Context, req UserReq) (UserRes, error) {
+	act := action.New("user.update", func(_ context.Context, req UserReq) (UserRes, error) {
 		return UserRes{
 			UserID: req.ID,
 			Limit:  req.Limit,
@@ -42,7 +42,12 @@ func TestTHTTP_AutomaticTagBinding(t *testing.T) {
 	server.Mount([]action.AnyAction{act})
 
 	// Test: Path {id} + Query ?limit=50 + Header X-User-Role + JSON Body {"email": "..."}
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/usr_42?limit=50", strings.NewReader(`{"email":"test@nexss.com"}`))
+	req := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/api/v1/users/usr_42?limit=50",
+		strings.NewReader(`{"email":"test@nexss.com"}`),
+	)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-User-Role", "admin")
 
@@ -74,7 +79,7 @@ func TestTHTTP_NilOptionSafety(t *testing.T) {
 	t.Parallel()
 
 	// Should not panic when nil option is passed
-	server := thttp.New(":0", nil, nil)
+	server := thttp.New(":0", nil)
 	if server == nil {
 		t.Fatal("expected non-nil server instance")
 	}

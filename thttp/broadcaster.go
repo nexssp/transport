@@ -8,8 +8,8 @@ import (
 const defaultSubscriberBuffer = 16
 
 type StreamBroadcaster interface {
-	Subscribe(channel string) (<-chan []byte, func())
-	Publish(channel string, payload []byte) (delivered int, dropped int)
+	Subscribe(channel string) (events <-chan []byte, unsubscribe func())
+	Publish(channel string, payload []byte) (delivered, dropped int)
 }
 
 type streamTopic struct {
@@ -32,7 +32,7 @@ func NewBroadcaster(buffer int) *InMemoryBroadcaster {
 	}
 }
 
-func (b *InMemoryBroadcaster) Subscribe(channel string) (<-chan []byte, func()) {
+func (b *InMemoryBroadcaster) Subscribe(channel string) (events <-chan []byte, unsubscribe func()) {
 	ch := make(chan []byte, b.buffer)
 
 	b.mu.Lock()
@@ -67,7 +67,7 @@ func (b *InMemoryBroadcaster) unsubscribe(channel string, ch chan []byte) {
 	close(ch)
 }
 
-func (b *InMemoryBroadcaster) Publish(channel string, payload []byte) (delivered int, dropped int) {
+func (b *InMemoryBroadcaster) Publish(channel string, payload []byte) (delivered, dropped int) {
 	b.mu.RLock()
 	topic := b.topics[channel]
 	if topic == nil {

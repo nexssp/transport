@@ -18,7 +18,7 @@ func TestTransport_OutputFormatting(t *testing.T) {
 	t.Parallel()
 
 	t.Run("Outputs plain string directly", func(t *testing.T) {
-		stringAct := action.New("test.string", func(ctx context.Context, _ struct{}) (string, error) {
+		stringAct := action.New("test.string", func(_ context.Context, _ struct{}) (string, error) {
 			return "Plain Text Result", nil
 		}).Route(tcli.Command("str-cmd", "String")).Build()
 
@@ -36,7 +36,7 @@ func TestTransport_OutputFormatting(t *testing.T) {
 	})
 
 	t.Run("Outputs action.MessageRes unwrapped", func(t *testing.T) {
-		msgAct := action.New("test.msg", func(ctx context.Context, _ struct{}) (action.MessageRes, error) {
+		msgAct := action.New("test.msg", func(_ context.Context, _ struct{}) (action.MessageRes, error) {
 			return action.MessageRes{Message: "Operation Completed Successfully"}, nil
 		}).Route(tcli.Command("msg-cmd", "Message")).Build()
 
@@ -58,7 +58,7 @@ func TestTransport_OutputFormatting(t *testing.T) {
 			ID    int    `json:"id"`
 			Title string `json:"title"`
 		}
-		structAct := action.New("test.struct", func(ctx context.Context, _ struct{}) (DataRes, error) {
+		structAct := action.New("test.struct", func(_ context.Context, _ struct{}) (DataRes, error) {
 			return DataRes{ID: 101, Title: "Nexss Architect"}, nil
 		}).Route(tcli.Command("json-cmd", "JSON Struct")).Build()
 
@@ -88,7 +88,7 @@ func TestTransport_OutputFormatting(t *testing.T) {
 func TestTransport_ActionExecutionFailure(t *testing.T) {
 	t.Parallel()
 
-	failingAct := action.New("test.failing", func(ctx context.Context, _ struct{}) (string, error) {
+	failingAct := action.New("test.failing", func(_ context.Context, _ struct{}) (string, error) {
 		return "", xerr.BadRequest("missing required parameter")
 	}).Route(tcli.Command("fail", "Failing action")).Build()
 
@@ -116,7 +116,7 @@ func TestTransport_ActionExecutionFailure(t *testing.T) {
 func TestTransport_NilSafetyAndEmptyArgs(t *testing.T) {
 	t.Parallel()
 
-	cli := tcli.New(nil, nil, tcli.WithCodec(nil))
+	cli := tcli.New(nil, tcli.WithCodec(nil))
 	if cli == nil {
 		t.Fatal("expected non-nil transport instance")
 	}

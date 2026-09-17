@@ -7,12 +7,15 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/codec"
 )
+
+var _ transport.Transport = (*Transport)(nil)
 
 type Option func(*Transport)
 
@@ -24,8 +27,6 @@ type Transport struct {
 	stderr     io.Writer
 	executable string
 }
-
-var _ transport.Transport = (*Transport)(nil)
 
 func New(opts ...Option) *Transport {
 	execName := "app"
@@ -93,26 +94,12 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	if len(t.args) == 0 {
 		t.PrintHelp()
-		return nil, nil
+		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
 	}
 
 	cmdArg := t.args[0]
 	if cmdArg == "--help" || cmdArg == "-h" || cmdArg == "help" {
-		if len(t.args) > 1 {
-			target := t.args[1]
-
-			if act := t.findAction(target); act != nil {
-				t.PrintCommandHelp(act)
-				return nil, nil
-			}
-
-			fmt.Fprintf(t.stderr, "Error: unknown command %q\n\n", target)
-			t.PrintHelp()
-			return nil, xerr.NotFound(fmt.Sprintf("command %q not found", target))
-		}
-
-		t.PrintHelp()
-		return nil, nil
+		return t.handleHelpCommand()
 	}
 
 	targetAction := t.findAction(cmdArg)
@@ -123,13 +110,43 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	}
 
 	// Intercept sub-command help (e.g. `srcpack pack --help`, `srcpack arch -h`)
-	for _, arg := range t.args[1:] {
-		if arg == "--help" || arg == "-h" || arg == "help" {
-			t.PrintCommandHelp(targetAction)
-			return nil, nil
-		}
+	if hasHelpFlag(t.args[1:]) {
+		t.PrintCommandHelp(targetAction)
+		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
 	}
 
+	return t.executeAction(ctx, targetAction)
+}
+
+// handleHelpCommand implements `app help [command]`.
+func (t *Transport) handleHelpCommand() (any, error) {
+	if len(t.args) <= 1 {
+		t.PrintHelp()
+		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
+	}
+
+	target := t.args[1]
+	if act := t.findAction(target); act != nil {
+		t.PrintCommandHelp(act)
+		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
+	}
+
+	fmt.Fprintf(t.stderr, "Error: unknown command %q\n\n", target)
+	t.PrintHelp()
+	return nil, xerr.NotFound(fmt.Sprintf("command %q not found", target))
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			return true
+		}
+	}
+	return false
+}
+
+// executeAction resolves, decodes, and runs the target action, then renders its result.
+func (t *Transport) executeAction(ctx context.Context, targetAction action.AnyAction) (any, error) {
 	ex, ok := targetAction.(action.Executable)
 	if !ok {
 		return nil, xerr.Internal("action is not executable")
@@ -145,31 +162,52 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		return nil, err
 	}
 
-	if res != nil {
-		switch out := res.(type) {
-		case string:
-			fmt.Fprintln(t.stdout, out)
-		case action.MessageRes:
-			fmt.Fprintln(t.stdout, out.Message)
-		default:
-			if t.codec.Name() == "json" {
-				data, _ := json.MarshalIndent(res, "", "  ")
-				fmt.Fprintln(t.stdout, string(data))
-			} else {
-				data, _ := t.codec.Marshal(res)
-				fmt.Fprintln(t.stdout, string(data))
-			}
-		}
+	if renderErr := t.renderResult(res); renderErr != nil {
+		fmt.Fprintf(t.stderr, "Error: %s\n", xerr.Sprint(renderErr))
+		return nil, renderErr
 	}
 
 	return res, nil
+}
+
+// renderResult prints the action result to stdout using the transport's codec.
+func (t *Transport) renderResult(res any) error {
+	if res == nil {
+		return nil
+	}
+
+	switch out := res.(type) {
+	case string:
+		fmt.Fprintln(t.stdout, out)
+		return nil
+	case action.MessageRes:
+		fmt.Fprintln(t.stdout, out.Message)
+		return nil
+	}
+
+	var (
+		data []byte
+		err  error
+	)
+
+	if t.codec.Name() == "json" {
+		data, err = json.MarshalIndent(res, "", "  ")
+	} else {
+		data, err = t.codec.Marshal(res)
+	}
+	if err != nil {
+		return xerr.Internal("failed to format result", err)
+	}
+
+	fmt.Fprintln(t.stdout, string(data))
+	return nil
 }
 
 func (t *Transport) findAction(cmd string) action.AnyAction {
 	for _, act := range t.actions {
 		for _, b := range act.GetBindings() {
 			if cliBind, ok := b.(CLIBinding); ok {
-				if cliBind.Command == cmd || slicesContains(cliBind.Aliases, cmd) {
+				if cliBind.Command == cmd || slices.Contains(cliBind.Aliases, cmd) {
 					return act
 				}
 			}

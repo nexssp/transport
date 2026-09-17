@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -41,6 +42,7 @@ func WithMethods(methods ...string) AdapterOption {
 	}
 }
 
+//nolint:gocyclo // one-shot generic action adapter; branch count driven by request lifecycle, not logic complexity
 func HTTP[Req, Res any](act *action.BuiltAction[Req, Res], options ...AdapterOption) http.Handler {
 	cfg := AdapterConfig{
 		MaxBodyBytes:        10 << 20,
@@ -117,17 +119,12 @@ func HTTP[Req, Res any](act *action.BuiltAction[Req, Res], options ...AdapterOpt
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(result) //nolint:errcheck // response write failure is terminal
 	})
 }
 
 func allowedMethod(method string, methods []string) bool {
-	for _, m := range methods {
-		if method == m {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(methods, method)
 }
 
 func writeErrorWithRequestID(w http.ResponseWriter, _ *http.Request, err error, requestID string) {
@@ -136,5 +133,5 @@ func writeErrorWithRequestID(w http.ResponseWriter, _ *http.Request, err error, 
 	response := appErr.Public(requestID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response) //nolint:errcheck // response write failure is terminal
 }

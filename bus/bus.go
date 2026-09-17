@@ -117,7 +117,7 @@ func Register[Req, Res any](b *TypedBus, h TypedHandler[Req, Res]) {
 }
 
 // Send dispatches a command to its registered handler.
-func Send[Req, Res any](b *TypedBus, ctx context.Context, req Req) (Res, error) {
+func Send[Req, Res any](ctx context.Context, b *TypedBus, req Req) (Res, error) {
 	var zero Req
 	key := fmt.Sprintf("%T", zero)
 	b.mu.RLock()
@@ -127,7 +127,12 @@ func Send[Req, Res any](b *TypedBus, ctx context.Context, req Req) (Res, error) 
 		var z Res
 		return z, fmt.Errorf("%w: %s", ErrNoHandler, key)
 	}
-	return h.(TypedHandler[Req, Res])(ctx, req)
+	typed, ok := h.(TypedHandler[Req, Res])
+	if !ok {
+		var z Res
+		return z, fmt.Errorf("%w: %s (stored handler has type %T)", ErrNoHandler, key, h)
+	}
+	return typed(ctx, req)
 }
 
 // ── Standard middlewares ──────────────────────────────────────────────────────

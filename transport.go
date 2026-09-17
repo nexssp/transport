@@ -36,7 +36,7 @@ type Transport interface {
 
 // MapToHTTPStatus converts an xerr.Kind to its corresponding standard HTTP status code.
 func MapToHTTPStatus(k xerr.Kind) int {
-	switch k {
+	switch k { //nolint:exhaustive // Internal and Shutdown intentionally share the default 500 response
 	case xerr.KindBadRequest, xerr.KindValidation:
 		return http.StatusBadRequest
 	case xerr.KindUnauthorized:

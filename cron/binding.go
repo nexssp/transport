@@ -4,17 +4,18 @@ import (
 	"time"
 )
 
-type CronBinding struct {
+// Binding defines a cron schedule binding: either a cron expression or a fixed interval.
+type Binding struct {
 	Schedule string
 	Interval time.Duration
 }
 
-func (b CronBinding) String() string {
+func (b Binding) String() string {
 	if b.Schedule != "" {
 		return "cron: " + b.Schedule
 	}
 	return "every " + b.Interval.String()
 }
 
-func Every(d time.Duration) CronBinding { return CronBinding{Interval: d} }
-func Cron(expr string) CronBinding      { return CronBinding{Schedule: expr} }
+func Every(d time.Duration) Binding { return Binding{Interval: d} }
+func Cron(expr string) Binding      { return Binding{Schedule: expr} }

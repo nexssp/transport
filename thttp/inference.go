@@ -20,6 +20,8 @@ func InferRoute(reqType reflect.Type) HTTPRoute {
 	var method, path string
 	hasID := hasIDField(reqType)
 
+	const pathIDSuffix = "/{id}"
+
 	switch {
 	case strings.HasPrefix(resource, "Create"):
 		method = "POST"
@@ -32,21 +34,21 @@ func InferRoute(reqType reflect.Type) HTTPRoute {
 		res := strings.TrimPrefix(resource, "Get")
 		path = toKebab(pluralize(res))
 		if hasID {
-			path += "/{id}"
+			path += pathIDSuffix
 		}
 	case strings.HasPrefix(resource, "Update"):
 		method = "PUT"
 		res := strings.TrimPrefix(resource, "Update")
 		path = toKebab(pluralize(res))
 		if hasID {
-			path += "/{id}"
+			path += pathIDSuffix
 		}
 	case strings.HasPrefix(resource, "Delete"):
 		method = "DELETE"
 		res := strings.TrimPrefix(resource, "Delete")
 		path = toKebab(pluralize(res))
 		if hasID {
-			path += "/{id}"
+			path += pathIDSuffix
 		}
 	default:
 		method = "POST"
@@ -57,8 +59,7 @@ func InferRoute(reqType reflect.Type) HTTPRoute {
 }
 
 func hasIDField(t reflect.Type) bool {
-	for i := 0; i < t.NumField(); i++ {
-		f := t.Field(i)
+	for f := range t.Fields() {
 		if f.Name == "ID" || f.Name == "Id" || f.Name == "UUID" || f.Tag.Get("path") == "id" {
 			return true
 		}

@@ -6,8 +6,11 @@ import (
 	"log"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/transport"
 	robfig "github.com/robfig/cron/v3"
 )
+
+var _ transport.Transport = (*Transport)(nil)
 
 type Transport struct {
 	actions []action.AnyAction
@@ -21,7 +24,7 @@ func New() *Transport {
 }
 
 func (t *Transport) CanHandle(b action.Binding) bool {
-	_, ok := b.(CronBinding)
+	_, ok := b.(Binding)
 	return ok
 }
 
@@ -38,7 +41,7 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 
 	for _, act := range t.actions {
 		for _, b := range act.GetBindings() {
-			if c, ok := b.(CronBinding); ok {
+			if c, ok := b.(Binding); ok {
 				if ex, ok := act.(action.Executable); ok {
 					sched := c.Schedule
 					if sched == "" {
@@ -61,5 +64,5 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	t.cron.Start()
 	<-ctx.Done()
 	<-t.cron.Stop().Done()
-	return nil, nil
+	return nil, ctx.Err()
 }

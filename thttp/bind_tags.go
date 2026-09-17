@@ -43,7 +43,7 @@ func BindFromTags(v any, r *http.Request) error {
 		planAny, _ = bindingCache.LoadOrStore(typ, p)
 	}
 
-	plan := planAny.(*bindingPlan)
+	plan := planAny.(*bindingPlan) //nolint:forcetypeassert // bindingCache stores only *bindingPlan
 	for _, fb := range plan.fields {
 		fieldVal, err := fb.extractor(r)
 		if err != nil {
@@ -58,7 +58,7 @@ func BindFromTags(v any, r *http.Request) error {
 
 func buildBindingPlan(typ reflect.Type) (*bindingPlan, error) {
 	var fields []fieldBinding
-	for i := 0; i < typ.NumField(); i++ {
+	for i := range typ.NumField() {
 		field := typ.Field(i)
 		if !field.IsExported() {
 			continue
@@ -76,7 +76,7 @@ func buildBindingPlan(typ reflect.Type) (*bindingPlan, error) {
 	return &bindingPlan{fields: fields}, nil
 }
 
-func getBindingTag(field reflect.StructField) (tag string, source string) {
+func getBindingTag(field reflect.StructField) (tag, source string) {
 	if t := field.Tag.Get("path"); t != "" {
 		return t, "path"
 	}
@@ -128,7 +128,7 @@ func makeExtractor(ft reflect.Type, tag, source string) (func(*http.Request) (re
 		return func(r *http.Request) (reflect.Value, error) {
 			c, err := r.Cookie(tag)
 			if err != nil || c == nil {
-				return reflect.Value{}, nil
+				return reflect.Value{}, nil //nolint:nilerr // missing cookie is absence of value, not an error
 			}
 			return convertString(c.Value, ft)
 		}, nil
@@ -148,7 +148,7 @@ func makeExtractor(ft reflect.Type, tag, source string) (func(*http.Request) (re
 }
 
 func convertString(val string, ft reflect.Type) (reflect.Value, error) {
-	if ft == reflect.TypeOf(time.Time{}) {
+	if ft == reflect.TypeFor[time.Time]() {
 		layouts := []string{
 			time.RFC3339,
 			time.RFC3339Nano,
@@ -163,7 +163,7 @@ func convertString(val string, ft reflect.Type) (reflect.Value, error) {
 		return reflect.Value{}, xerr.BadRequest(fmt.Sprintf("invalid time format %q (expected RFC3339 or YYYY-MM-DD)", val))
 	}
 
-	switch ft.Kind() {
+	switch ft.Kind() { //nolint:exhaustive // only convertible scalar kinds are handled; others error out
 	case reflect.String:
 		return reflect.ValueOf(val).Convert(ft), nil
 
@@ -196,6 +196,6 @@ func convertString(val string, ft reflect.Type) (reflect.Value, error) {
 		return reflect.ValueOf(b).Convert(ft), nil
 
 	default:
-		return reflect.Value{}, xerr.Internal(fmt.Sprintf("unsupported target field type: %s", ft.String()))
+		return reflect.Value{}, xerr.Internal("unsupported target field type: " + ft.String())
 	}
 }

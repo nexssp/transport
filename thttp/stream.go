@@ -20,11 +20,11 @@ func StreamNDJSON[E any](c codec.Codec, getIter func(ctx context.Context) (iter.
 			appErr := xerr.From(err)
 			w.Header().Set("Content-Type", c.ContentType())
 			w.WriteHeader(transport.MapToHTTPStatus(appErr.Kind))
-			_ = c.NewEncoder(w).Encode(appErr.Public(""))
+			_ = c.NewEncoder(w).Encode(appErr.Public("")) //nolint:errcheck // response write failure is terminal
 			return
 		}
 
-		_ = StreamIterator(r.Context(), w, seq, c)
+		_ = StreamIterator(r.Context(), w, seq, c) //nolint:errcheck // stream error surfaces via client disconnect
 	}
 }
 
@@ -33,7 +33,7 @@ func StreamIterator[T any](ctx context.Context, w http.ResponseWriter, seq iter.
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.Header().Set("Cache-Control", "no-cache")
-	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{}) //nolint:errcheck // best-effort; not all ResponseWriters support it
 	w.WriteHeader(http.StatusOK)
 
 	flusher, _ := w.(http.Flusher)

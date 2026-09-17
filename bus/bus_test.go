@@ -19,14 +19,14 @@ func TestBus_PubSub(t *testing.T) {
 	var receivedCount atomic.Int32
 
 	// Subscribe two different handlers to the same subject
-	b.Subscribe("events.user_created", func(ctx context.Context, msg string) error {
+	b.Subscribe("events.user_created", func(_ context.Context, msg string) error {
 		if msg == "usr_123" {
 			receivedCount.Add(1)
 		}
 		return nil
 	})
 
-	b.Subscribe("events.user_created", func(ctx context.Context, msg string) error {
+	b.Subscribe("events.user_created", func(_ context.Context, msg string) error {
 		if msg == "usr_123" {
 			receivedCount.Add(1)
 		}
@@ -62,7 +62,7 @@ func TestTypedBus_CommandRouting(t *testing.T) {
 	tb := bus.NewTyped()
 
 	// Register 1:1 handler
-	bus.Register(tb, func(ctx context.Context, cmd CreateOrderCmd) (OrderRes, error) {
+	bus.Register(tb, func(_ context.Context, cmd CreateOrderCmd) (OrderRes, error) {
 		if cmd.Quantity <= 0 {
 			return OrderRes{}, errors.New("quantity must be > 0")
 		}
@@ -70,7 +70,7 @@ func TestTypedBus_CommandRouting(t *testing.T) {
 	})
 
 	// Send valid command
-	res, err := bus.Send[CreateOrderCmd, OrderRes](tb, context.Background(), CreateOrderCmd{
+	res, err := bus.Send[CreateOrderCmd, OrderRes](context.Background(), tb, CreateOrderCmd{
 		ItemID:   "itm_1",
 		Quantity: 5,
 	})
@@ -82,7 +82,7 @@ func TestTypedBus_CommandRouting(t *testing.T) {
 	}
 
 	// Send invalid command
-	_, err = bus.Send[CreateOrderCmd, OrderRes](tb, context.Background(), CreateOrderCmd{
+	_, err = bus.Send[CreateOrderCmd, OrderRes](context.Background(), tb, CreateOrderCmd{
 		ItemID:   "itm_1",
 		Quantity: 0,
 	})
@@ -96,7 +96,7 @@ func TestTypedBus_MissingHandler(t *testing.T) {
 	tb := bus.NewTyped()
 
 	type UnregisteredCmd struct{}
-	_, err := bus.Send[UnregisteredCmd, string](tb, context.Background(), UnregisteredCmd{})
+	_, err := bus.Send[UnregisteredCmd, string](context.Background(), tb, UnregisteredCmd{})
 	if err == nil || !strings.Contains(err.Error(), "no handler") {
 		t.Fatalf("expected no handler error, got %v", err)
 	}
