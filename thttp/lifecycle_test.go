@@ -11,6 +11,29 @@ import (
 	"time"
 )
 
+// waitForTCPReady blocks until a TCP connection to addr succeeds or the
+// timeout expires. The test uses it to synchronize with Do's internal
+// net.Listen call: on a slow or race-instrumented runner the client can
+// otherwise outrun the listener and see ECONNREFUSED before the server
+// has started.
+func waitForTCPReady(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+
+	dialer := &net.Dialer{Timeout: 50 * time.Millisecond}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
+		cancel()
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server did not start listening on %s within %s", addr, timeout)
+}
+
 func TestDoReturnsStartupFailure(t *testing.T) {
 	transport := New("://invalid-address")
 	_, err := transport.Do(context.Background(), nil)
@@ -59,6 +82,11 @@ func TestDoGracefullyDrainsInFlightRequest(t *testing.T) {
 		doDone <- err
 	}()
 
+	// Synchronize with Do's net.Listen call before dispatching the
+	// request. Without this gate the client goroutine races the server
+	// goroutine and can observe ECONNREFUSED on a slower runner.
+	waitForTCPReady(t, addr, 3*time.Second)
+
 	requestDone := make(chan error, 1)
 	go func() {
 		request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+addr+"/block", http.NoBody)
@@ -78,6 +106,8 @@ func TestDoGracefullyDrainsInFlightRequest(t *testing.T) {
 
 	select {
 	case <-entered:
+	case err := <-requestDone:
+		t.Fatalf("request failed before reaching the handler: %v", err)
 	case <-time.After(3 * time.Second):
 		t.Fatal("request did not reach the handler")
 	}

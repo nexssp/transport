@@ -1,6 +1,6 @@
 version: '3'
 
-# Every command in this file is meant to be run from transport/.
+# Every command in this file is meant to be run from the transport/.
 # Run `task --list` to see the short descriptions.
 vars:
   NFLOW: 'go run ../flow/cmd/nflow'
@@ -21,7 +21,7 @@ tasks:
   # ── test ─────────────────────────────────────────────────────────
 
   test:
-    desc: Short tests (no race detector)
+    desc: Fast short tests (no race detector)
     cmds:
       - go test -short -count=1 ./...
 
@@ -30,6 +30,11 @@ tasks:
     cmds:
       - go test -race -count=1 ./...
 
+  test:short:
+    desc: Alias for `test`
+    cmds:
+      - task: test
+
   bench:
     desc: Run Go benchmarks
     cmds:
@@ -37,17 +42,20 @@ tasks:
 
   # ── nflow examples ───────────────────────────────────────────────
   #
-  # .nflow examples live in examples/. They are lint-checked in CI
+  # The .nflow examples live in examples/. They are lint-checked in CI
   # and can be run manually. They cannot be `run` in CI because every
   # one of them starts a blocking server or scheduler.
   #
-  # Lint a source tree: task lint:nflow -- ./examples/...
-  # Run one example:   task run -- examples/03_multi_route_api.nflow
+  # Lint the default target:   task lint:nflow
+  # Lint a source tree:        task lint:nflow -- ./...
+  # Run one example:           task run -- examples/03_multi_route_api.nflow
 
   lint:nflow:
-    desc: 'Lint Flow sources, e.g. task lint:nflow -- ./examples/...'
+    desc: 'Lint Flow sources (default: ./examples/...). Override with: task lint:nflow -- <target>'
+    vars:
+      TARGETS: '{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}./examples/...{{end}}'
     cmds:
-      - '{{.NFLOW}} lint {{.CLI_ARGS}}'
+      - '{{.NFLOW}} lint {{.TARGETS}}'
 
   run:
     desc: 'Run an example: task run -- examples/03_multi_route_api.nflow'
@@ -94,8 +102,6 @@ tasks:
       - task: vet
       - task: test:race
       - task: lint:nflow
-        vars:
-          CLI_ARGS: ./examples/...
 
   pre-push:
     desc: Fast pre-push gate — lint of new code and short tests

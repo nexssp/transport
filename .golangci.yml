@@ -192,7 +192,8 @@ formatters:
     - goimports
   settings:
     gofumpt:
-      # extra-rules: true   # enable for even stricter formatting
+      extra:
+        group-params: true
     goimports:
-      # local-prefixes:
-      #   - github.com/your/org/project
+      local-prefixes:
+        - github.com/nexssp/transport
