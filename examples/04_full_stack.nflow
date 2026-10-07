@@ -1,0 +1,49 @@
+@description "Full-stack microservice: HTTP API, event bus, cron, background worker"
+
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8082", timeout: "5s" }
+@require github.com/nexssp/transport/tbus/nexssflow
+@require github.com/nexssp/transport/cron/nexssflow
+@require github.com/nexssp/transport/tworker/nexssflow
+
+# ------------------------------------------------------------------------------
+# HTTP: enqueue a job onto the internal event bus
+# ------------------------------------------------------------------------------
+@pipeline enqueue:route="POST /jobs" :status=202
+  runtime.uuid @{ as: "job_id" }
+  -> tbus.publish @{ topic: "jobs.enqueued" }
+  -> { accepted: true, job_id: .job_id }
+@end
+
+@pipeline status:route="GET /status"
+  runtime.const @{ value: { status: "serving", bus: "active", scheduler: "running" } }
+@end
+
+# ------------------------------------------------------------------------------
+# Bus subscriber: process jobs emitted by the HTTP ingress
+# ------------------------------------------------------------------------------
+@pipeline job_worker:topic="jobs.enqueued"
+  { message: "Job received", job_id: .job_id } -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Cron: heartbeat tick every minute
+# ------------------------------------------------------------------------------
+@pipeline heartbeat:cron="@every 1m"
+  { message: "Heartbeat tick" } -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Worker: periodic telemetry sync every 3 seconds
+# ------------------------------------------------------------------------------
+@pipeline telemetry:worker="3s"
+  { message: "Telemetry synced" } -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Boot all four transports concurrently.
+#   thttp.listen    discovers /jobs, /status   (route bindings)
+#   tbus.listen     discovers job_worker       (topic binding)
+#   cron.listen     discovers heartbeat        (schedule binding)
+#   tworker.listen  discovers telemetry        (worker binding)
+# ------------------------------------------------------------------------------
+( thttp.listen & tbus.listen & cron.listen & tworker.listen )

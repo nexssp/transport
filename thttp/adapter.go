@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/transport"
 )
@@ -55,19 +56,19 @@ func HTTP[Req, Res any](act *action.BuiltAction[Req, Res], options ...AdapterOpt
 		}
 	}
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return RequestIdentity(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !allowedMethod(r.Method, cfg.Methods) {
 			w.Header().Set("Allow", strings.Join(cfg.Methods, ", "))
-			writeErrorWithRequestID(w, r, xerr.MethodNotAllowed("method not allowed"), r.Header.Get(transport.HeaderRequestID))
+			writeErrorWithRequestID(w, r, xerr.MethodNotAllowed("method not allowed"), xctx.RequestIDFrom(r.Context()))
 			return
 		}
 		if act == nil {
-			writeErrorWithRequestID(w, r, xerr.Internal("nil action"), r.Header.Get(transport.HeaderRequestID))
+			writeErrorWithRequestID(w, r, xerr.Internal("nil action"), xctx.RequestIDFrom(r.Context()))
 			return
 		}
 
 		ctx := r.Context()
-		requestID := r.Header.Get(transport.HeaderRequestID)
+		requestID := xctx.RequestIDFrom(ctx)
 		executionID := r.Header.Get(transport.HeaderExecutionID)
 		if executionID == "" && cfg.GenerateExecutionID {
 			executionID = "exec-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + strconv.FormatUint(sequence.Add(1), 10)
@@ -120,7 +121,7 @@ func HTTP[Req, Res any](act *action.BuiltAction[Req, Res], options ...AdapterOpt
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(result) //nolint:errcheck // response write failure is terminal
-	})
+	}))
 }
 
 func allowedMethod(method string, methods []string) bool {

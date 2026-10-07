@@ -1,0 +1,116 @@
+version: '3'
+
+# Every command in this file is meant to be run from transport/.
+# Run `task --list` to see the short descriptions.
+vars:
+  NFLOW: 'go run ../flow/cmd/nflow'
+
+tasks:
+  default:
+    desc: Show every available task
+    cmds:
+      - task --list
+
+  # ── build ────────────────────────────────────────────────────────
+
+  build:
+    desc: Build every Go package
+    cmds:
+      - go build ./...
+
+  # ── test ─────────────────────────────────────────────────────────
+
+  test:
+    desc: Short tests (no race detector)
+    cmds:
+      - go test -short -count=1 ./...
+
+  test:race:
+    desc: Race-enabled tests
+    cmds:
+      - go test -race -count=1 ./...
+
+  bench:
+    desc: Run Go benchmarks
+    cmds:
+      - go test ./... -run '^$' -bench=. -benchmem
+
+  # ── nflow examples ───────────────────────────────────────────────
+  #
+  # .nflow examples live in examples/. They are lint-checked in CI
+  # and can be run manually. They cannot be `run` in CI because every
+  # one of them starts a blocking server or scheduler.
+  #
+  # Lint a source tree: task lint:nflow -- ./examples/...
+  # Run one example:   task run -- examples/03_multi_route_api.nflow
+
+  lint:nflow:
+    desc: 'Lint Flow sources, e.g. task lint:nflow -- ./examples/...'
+    cmds:
+      - '{{.NFLOW}} lint {{.CLI_ARGS}}'
+
+  run:
+    desc: 'Run an example: task run -- examples/03_multi_route_api.nflow'
+    cmds:
+      - '{{.NFLOW}} run {{.CLI_ARGS}}'
+
+  # ── quality ──────────────────────────────────────────────────────
+
+  vet:
+    desc: Run go vet across all packages
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Apply configured gofumpt and goimports formatters
+    cmds:
+      - golangci-lint fmt
+
+  fmt:check:
+    desc: Check formatting without rewriting files
+    cmds:
+      - golangci-lint fmt --diff
+
+  lint:
+    desc: Run configured golangci-lint checks
+    cmds:
+      - golangci-lint run ./...
+
+  lint:new:
+    desc: Run golangci-lint only on code changed since origin/main
+    cmds:
+      - golangci-lint run --new-from-rev=origin/main
+
+  lint:fix:
+    desc: Auto-fix on code changed since origin/main
+    cmds:
+      - golangci-lint run --fix --new-from-rev=origin/main
+
+  check:
+    desc: Full local gate — format check, lint, vet, race tests, examples
+    cmds:
+      - task: fmt:check
+      - task: lint
+      - task: vet
+      - task: test:race
+      - task: lint:nflow
+        vars:
+          CLI_ARGS: ./examples/...
+
+  pre-push:
+    desc: Fast pre-push gate — lint of new code and short tests
+    deps:
+      - lint:new
+      - test
+
+  # ── maintenance ──────────────────────────────────────────────────
+
+  tidy:
+    desc: Tidy the transport module
+    cmds:
+      - go mod tidy
+
+  clean:
+    desc: Remove build/test artifacts
+    cmds:
+      - rm -f coverage.txt coverage.html

@@ -22,6 +22,9 @@ func bindCLITarget(v any, rawArgs []string) error {
 		if elem.Kind() == reflect.String && len(rawArgs) > 0 {
 			elem.SetString(strings.Join(rawArgs, " "))
 		}
+		if elem.Kind() == reflect.Interface && len(rawArgs) > 0 {
+			return xerr.BadRequest("cli: dynamic request has no CLI schema; declare @schema and set :schema=NAME")
+		}
 		return nil
 	}
 

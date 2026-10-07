@@ -1,0 +1,17 @@
+@description "Ideal Flow HTTP API"
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
+
+@pipeline health:route="GET /health"
+  const @{ value: { status: "up" } }
+@end
+
+@pipeline echo:route="POST /echo"
+  noop
+@end
+
+@pipeline add:route="POST /add"
+  { result: .a + .b }
+@end
+
+# Zero arguments! thttp.listen automatically mounts all pipelines that have a :route!
+thttp.listen

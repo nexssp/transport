@@ -12,5 +12,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    uses: nexssp/.github/.github/workflows/go-ci.yml@v1
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Setup Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Compile all Go packages
+        run: task build
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+      - name: Run Go tests with race detector
+        run: task test:race
+
+      - name: Install nflow CLI
+        run: go install github.com/nexssp/flow/cmd/nflow@main
+
+      - name: Lint all Flow examples
+        run: nflow lint ./examples/...

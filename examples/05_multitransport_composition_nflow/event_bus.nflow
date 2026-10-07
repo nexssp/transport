@@ -1,0 +1,65 @@
+@description "Event-Driven Microservices Hub (HTTP + Event Bus + Cron)"
+
+# Mount both HTTP server and In-Memory Event Bus transports
+@require github.com/nexssp/transport/thttp { addr: ":8081" }
+@require github.com/nexssp/transport/tbus
+@require github.com/nexssp/transport/cron
+
+# ------------------------------------------------------------------------------
+# Subscriber 1: Fraud Detection Service (Topic: "orders.created")
+# ------------------------------------------------------------------------------
+@pipeline fraud_check:topic="orders.created"
+  # Inspect incoming order volume and score risk
+  {
+    order_id:   .id,
+    risk_score: 0.12,
+    verdict:    "APPROVED"
+  }
+  -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Subscriber 2: Audit Ledger Service (Topic: "orders.created")
+# ------------------------------------------------------------------------------
+@pipeline audit_log:topic="orders.created"
+  runtime.with @{
+    audit_logged: true,
+    ledger_id:    runtime.uuid
+  }
+  -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Scheduled Job: Hourly Maintenance (Cron)
+# ------------------------------------------------------------------------------
+@pipeline cache_prune:cron="@every 1h"
+  runtime.const @{ value: { task: "cache_pruning", purged_keys: 42 } }
+  -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Ingress: Payment Webhook Gateway (POST /webhook/payment)
+# ------------------------------------------------------------------------------
+@pipeline payment_webhook:route="POST /webhook/payment" :status=202
+  # Normalize payload and generate tracking order ID
+  {
+    id:       runtime.uuid,
+    amount:   .amount,
+    currency: .currency,
+    customer: .customer
+  }
+  # Broadcast event across in-memory bus to both subscribers!
+  -> tbus.publish @{ topic: "orders.created" }
+  # Immediate acknowledge response to HTTP caller
+  -> {
+    status:   "accepted",
+    order_id: .id,
+    message:  "Order queued for processing"
+  }
+@end
+
+# ------------------------------------------------------------------------------
+# Boot All Services
+# ------------------------------------------------------------------------------
+# Start the HTTP server (and auto-bind the event bus consumers)
+thttp.listen

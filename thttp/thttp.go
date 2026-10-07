@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/codec"
@@ -164,11 +166,22 @@ func (t *Transport) Handler() http.Handler {
 	for _, m := range slices.Backward(t.mdws) {
 		h = m(h)
 	}
-	return h
+	return RequestIdentity(h)
 }
 
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
-	t.server = &http.Server{
+	if ctx == nil {
+		return nil, errors.New("http server context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", t.addr)
+	if err != nil {
+		return nil, fmt.Errorf("http server crash: %w", err)
+	}
+	server := &http.Server{
 		Addr:              t.addr,
 		Handler:           t.Handler(),
 		ReadHeaderTimeout: t.readHeaderTimeout,
@@ -176,17 +189,32 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		WriteTimeout:      t.writeTimeout,
 		IdleTimeout:       t.idleTimeout,
 	}
+	t.server = server
 
+	serveErr := make(chan error, 1)
+	serveDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-		defer cancel()
-		_ = t.server.Shutdown(shutCtx) //nolint:errcheck // shutdown error is logged by caller if it matters
+		defer close(serveDone)
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- fmt.Errorf("http server crash: %w", err)
+		}
 	}()
 
-	if err := t.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return nil, fmt.Errorf("http server crash: %w", err)
+	select {
+	case err := <-serveErr:
+		<-serveDone
+		return nil, err
+	case <-ctx.Done():
 	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
+		<-serveDone
+		return nil, fmt.Errorf("http server graceful shutdown failed: %w", err)
+	}
+	<-serveDone
 	return nil, ctx.Err()
 }
 
@@ -195,7 +223,10 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		reqID := r.Header.Get(transport.HeaderRequestID)
+		reqID := xctx.RequestIDFrom(ctx)
+		if reqID == "" {
+			reqID = r.Header.Get(transport.HeaderRequestID)
+		}
 		if reqID != "" {
 			w.Header().Set(transport.HeaderRequestID, reqID)
 		}
@@ -262,9 +293,6 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 		}
 
 		status := http.StatusOK
-		if r.Method == http.MethodPost {
-			status = http.StatusCreated
-		}
 		if meta != nil && meta.SuccessStatus != 0 {
 			status = meta.SuccessStatus
 		}

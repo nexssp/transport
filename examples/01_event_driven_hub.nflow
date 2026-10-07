@@ -1,0 +1,42 @@
+@description "Event-Driven Hub: Fast HTTP Ingress with Background Fan-Out"
+
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080", timeout: "5s" }
+@require github.com/nexssp/transport/tbus/nexssflow
+
+# ------------------------------------------------------------------------------
+# Ingress: Receive webhook and broadcast
+# ------------------------------------------------------------------------------
+@pipeline webhook:route="POST /events" :status=202
+  # 1. Assign a tracing ID onto the incoming payload.
+  #    runtime.uuid @{ as: "event_id" } merges the generated UUID into
+  #    the input map under "event_id", preserving all other fields.
+  runtime.uuid @{ as: "event_id" }
+  # 2. Publish to the in-process bus. Because tbus.publish is
+  #    synchronous and only hands the payload to the bus, the HTTP
+  #    response is not blocked by any subscriber work. Subscribers run
+  #    their own goroutines and their own pipelines.
+  -> tbus.publish @{ topic: "events.incoming" }
+  # 3. Return an immediate 202 Accepted to the caller.
+  -> { status: "accepted", tracking_id: .event_id }
+@end
+
+# ------------------------------------------------------------------------------
+# Subscriber 1: Audit Logger
+# ------------------------------------------------------------------------------
+@pipeline audit:topic="events.incoming"
+  { message: "Audit log recorded", event: .event_id } -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Subscriber 2: Heavy Processor
+# ------------------------------------------------------------------------------
+@pipeline process:topic="events.incoming"
+  # Simulate heavy work. Because this runs on the bus subscriber, it does
+  # not block the HTTP ingress path.
+  runtime.sleep @{ duration_ms: 250 }
+  -> { message: "Processing complete", event: .event_id }
+  -> log.info
+@end
+
+# Boot BOTH transports concurrently using Flow's parallel operator (&).
+( thttp.listen & tbus.listen )

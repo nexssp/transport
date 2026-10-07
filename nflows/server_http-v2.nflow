@@ -1,0 +1,27 @@
+@description "Declarative HTTP Server with 3 Endpoints"
+
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
+
+# Endpoint 1: Healthcheck
+@pipeline health:route="GET /health"
+  runtime.const @{ value: { status: "up", version: "1.0.0" } }
+@end
+
+# Endpoint 2: Echo request payload
+@pipeline echo:route="POST /echo"
+  runtime.noop
+@end
+
+# Endpoint 3: Calculator / Data projection
+@pipeline add:route="POST /add"
+  { result: .a + .b }
+@end
+
+# Execute listener with arguments
+thttp.listen @{
+  endpoints: [
+    "pipeline.health",
+    "pipeline.echo",
+    "pipeline.add"
+  ]
+}

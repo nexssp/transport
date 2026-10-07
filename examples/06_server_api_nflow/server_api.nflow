@@ -1,0 +1,69 @@
+@description "Enterprise User Service & Ingestion API"
+
+# Configure HTTP server on port 8080
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
+
+# ------------------------------------------------------------------------------
+# Endpoint 1: Health & Infrastructure Probe (GET /health)
+# ------------------------------------------------------------------------------
+@pipeline health:route="GET /health" :status=200
+  runtime.const @{ value: {
+    status:  "healthy",
+    uptime:  "active",
+    version: "2.4.0",
+    engine:  "nexss-flow"
+  }}
+@end
+
+# ------------------------------------------------------------------------------
+# Endpoint 2: Data Ingestion & Sanitization (POST /api/v1/echo)
+# ------------------------------------------------------------------------------
+@pipeline echo:route="POST /api/v1/echo" :status=200
+  # Mask credentials, strip whitespace, and inject server telemetry
+  runtime.with @{
+    processed_at: runtime.uuid,
+    server:       "edge-node-01"
+  }
+@end
+
+# ------------------------------------------------------------------------------
+# Endpoint 3: Parallel User Registration & Enrichment (POST /api/v1/users)
+# ------------------------------------------------------------------------------
+@pipeline register_user:route="POST /api/v1/users" :status=201
+  # Step 1: Ensure required fields exist or fail-fast with validation error
+  {
+    user_id: runtime.uuid,
+    email:   .email,
+    name:    .name,
+    plan:    .plan
+  }
+  # Step 2: Parallel execution - enrich user profile and calculate billing tier
+  -> (
+      # Branch A: Security & Account Metadata
+      {
+        account_id: .user_id,
+        verified:   false,
+        status:     "pending_verification"
+      }
+      &
+      # Branch B: Tier Quota Resolution
+      {
+        tier:         .plan,
+        rate_limit:   1000,
+        sandbox_mode: true
+      }
+  )
+  # Step 3: Project the aggregated parallel branches into a clean response
+  -> {
+      id:       .["branch_0"].account_id,
+      status:   .["branch_0"].status,
+      quota:    .["branch_1"].rate_limit,
+      tier:     .["branch_1"].tier
+  }
+@end
+
+# ------------------------------------------------------------------------------
+# Boot Server
+# ------------------------------------------------------------------------------
+# thttp automatically discovers every @pipeline above tagged with :route!
+thttp.listen

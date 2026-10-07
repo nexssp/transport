@@ -1,0 +1,46 @@
+@description "Multi-route HTTP API: methods, custom statuses, error mapping, fallback"
+
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8081", timeout: "5s" }
+
+# ------------------------------------------------------------------------------
+# 200 OK — plain health check
+# ------------------------------------------------------------------------------
+@pipeline health:route="GET /health"
+  runtime.const @{ value: { status: "ok", service: "api", version: "1.0.0" } }
+@end
+
+# ------------------------------------------------------------------------------
+# 201 Created — transform body, generate ID
+# ------------------------------------------------------------------------------
+@pipeline create:route="POST /items" :status=201
+  runtime.uuid @{ as: "id" }
+  -> { received: .name, id: .id, created: true }
+@end
+
+# ------------------------------------------------------------------------------
+# 204 No Content — DELETE has no response body
+# ------------------------------------------------------------------------------
+@pipeline remove:route="DELETE /items" :status=204
+  runtime.noop
+@end
+
+# ------------------------------------------------------------------------------
+# Error mapping — runtime.fail with kind → HTTP status
+#   KindNotFound     → 404
+#   KindForbidden    → 403
+#   KindBadRequest   → 400
+#   KindUnavailable  → 503
+# ------------------------------------------------------------------------------
+@pipeline missing:route="GET /missing"
+  runtime.fail @{ kind: "NotFound", message: "resource does not exist" }
+@end
+
+# ------------------------------------------------------------------------------
+# Fallback via || — left arm fails, right arm recovers
+# ------------------------------------------------------------------------------
+@pipeline resilient:route="GET /resilient"
+  runtime.fail @{ kind: "Unavailable", message: "upstream down" }
+  || { recovered: true, source: "fallback" }
+@end
+
+thttp.listen

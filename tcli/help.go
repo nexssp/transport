@@ -57,8 +57,10 @@ func (t *Transport) PrintCommandHelp(act action.AnyAction) {
 	// Detect positional arguments once before rendering the usage line.
 	positionalText := ""
 	var payload any
-
-	if tp, ok := act.(action.TypedPayload); ok {
+	requestSchema, hasRequestSchema := requestSchemaFromAction(act)
+	if hasRequestSchema {
+		positionalText = requestSchemaPositionalUsage(requestSchema)
+	} else if tp, ok := act.(action.TypedPayload); ok {
 		payload = tp.ReqPayload()
 		positionalText = t.positionalUsage(payload)
 	}
@@ -78,7 +80,9 @@ func (t *Transport) PrintCommandHelp(act action.AnyAction) {
 		}
 	}
 
-	if payload != nil {
+	if hasRequestSchema {
+		t.printRequestSchemaFlags(requestSchema)
+	} else if payload != nil {
 		t.printStructFlags(payload)
 	}
 }

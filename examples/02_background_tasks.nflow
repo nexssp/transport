@@ -1,0 +1,22 @@
+@description "Autonomous Maintenance: Cron schedules and Interval Workers"
+
+@require github.com/nexssp/transport/cron/nexssflow
+@require github.com/nexssp/transport/tworker/nexssflow
+
+# ------------------------------------------------------------------------------
+# Worker: Syncs state every 2 seconds continuously
+# ------------------------------------------------------------------------------
+@pipeline telemetry_sync:worker="2s"
+  # Workers auto-recover from panics. Retry logic is baked into the transport.
+  { message: "Syncing telemetry state..." } -> log.info
+@end
+
+# ------------------------------------------------------------------------------
+# Cron: Executes exactly at the top of every minute
+# ------------------------------------------------------------------------------
+@pipeline nightly_cleanup:cron="@every 1m"
+  { message: "Performing deep database vacuum..." } -> log.info
+@end
+
+# Boot both schedulers concurrently
+( cron.listen & tworker.listen )

@@ -152,7 +152,11 @@ func (t *Transport) executeAction(ctx context.Context, targetAction action.AnyAc
 		return nil, xerr.Internal("action is not executable")
 	}
 
+	requestSchema, hasRequestSchema := requestSchemaFromAction(targetAction)
 	decoder := func(target any) error {
+		if hasRequestSchema {
+			return bindCLIRequestTarget(target, t.args[1:], requestSchema)
+		}
 		return bindCLITarget(target, t.args[1:])
 	}
 
