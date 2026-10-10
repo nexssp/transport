@@ -17,6 +17,8 @@ import (
 
 var _ transport.Transport = (*Transport)(nil)
 
+const workerErrQuiet = 5 * time.Second
+
 type Transport struct {
 	workers []*workerInstance
 	wg      sync.WaitGroup
@@ -45,6 +47,11 @@ type workerInstance struct {
 	meta     *action.Meta
 	interval time.Duration
 	restart  bool
+
+	errMu      sync.Mutex
+	lastErrMsg string
+	lastErrAt  time.Time
+	suppressed uint64
 }
 
 func New() *Transport {
@@ -74,7 +81,6 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		go t.runWorker(ctx, w)
 	}
 
-	// Block until context is canceled and all workers finish gracefully
 	<-ctx.Done()
 	t.wg.Wait()
 	return nil, ctx.Err()
@@ -86,7 +92,6 @@ func (t *Transport) runWorker(ctx context.Context, w *workerInstance) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
 
-	// Helper for safe isolated tick execution
 	runIteration := func() bool {
 		defer func() {
 			if r := recover(); r != nil {
@@ -99,12 +104,11 @@ func (t *Transport) runWorker(ctx context.Context, w *workerInstance) {
 
 		err := t.execute(ctx, w)
 		if err != nil && !w.restart {
-			return false // Stop worker if restart is disabled
+			return false
 		}
 		return true
 	}
 
-	// Initial immediate run
 	if !runIteration() {
 		return
 	}
@@ -129,12 +133,46 @@ func (t *Transport) execute(ctx context.Context, w *workerInstance) error {
 	scope.Endpoint = w.meta.Name
 
 	_, err := w.act.ExecuteDecoded(runCtx, nil)
-	if err != nil {
-		if errors.Is(err, action.ErrLocked) {
-			slog.DebugContext(runCtx, "worker_skipped_not_leader", "action", w.meta.Name)
-			return nil
-		}
-		slog.ErrorContext(runCtx, "worker_failed", "action", w.meta.Name, "error", err)
+	if err == nil {
+		return nil
 	}
+
+	if errors.Is(err, action.ErrLocked) {
+		slog.DebugContext(runCtx, "worker_skipped_not_leader", "action", w.meta.Name)
+		return nil
+	}
+
+	t.logWorkerError(runCtx, w, err)
 	return err
+}
+
+func (t *Transport) logWorkerError(ctx context.Context, w *workerInstance, err error) {
+	msg := err.Error()
+	now := time.Now()
+
+	w.errMu.Lock()
+	quiet := msg == w.lastErrMsg && now.Sub(w.lastErrAt) < workerErrQuiet
+	if quiet {
+		w.suppressed++
+		w.errMu.Unlock()
+		return
+	}
+	suppressed := w.suppressed
+	w.suppressed = 0
+	w.lastErrMsg = msg
+	w.lastErrAt = now
+	w.errMu.Unlock()
+
+	if suppressed > 0 {
+		slog.WarnContext(ctx, "worker_failed_summary",
+			"action", w.meta.Name,
+			"suppressed", suppressed,
+			"window", workerErrQuiet,
+		)
+	}
+
+	slog.ErrorContext(ctx, "worker_failed",
+		"action", w.meta.Name,
+		"error", err,
+	)
 }

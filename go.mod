@@ -5,7 +5,7 @@ go 1.26.9
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nexssp/flow v0.22.0
-	github.com/nexssp/kernel v0.28.0
+	github.com/nexssp/kernel v0.30.0
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/sync v0.24.0
 )
@@ -18,7 +18,6 @@ require (
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/nexssp/validation v0.2.4 // indirect
-	github.com/tetratelabs/wazero v1.12.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
