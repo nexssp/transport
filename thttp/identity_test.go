@@ -61,7 +61,7 @@ func TestRequestIdentityUsesValidTraceparentAndExplicitHeadersWin(t *testing.T) 
 	})
 
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/trace", http.NoBody)
-	request.Header.Set("traceparent", traceparent)
+	request.Header.Set("Traceparent", traceparent)
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)
 	if got, want := response.Body.String(), "4bf92f3577b34da6a3ce929d0e0e4736:00f067aa0ba902b7"; got != want {
@@ -72,7 +72,7 @@ func TestRequestIdentityUsesValidTraceparentAndExplicitHeadersWin(t *testing.T) 
 	}
 
 	request = httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/trace", http.NoBody)
-	request.Header.Set("traceparent", traceparent)
+	request.Header.Set("Traceparent", traceparent)
 	request.Header.Set(identity.HeaderTraceID, "explicit-trace")
 	request.Header.Set(identity.HeaderSpanID, "explicit-span")
 	response = httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestRequestIdentityRejectsMalformedTraceparent(t *testing.T) {
 			})
 			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/trace", http.NoBody)
 			if value != "" {
-				request.Header.Set("traceparent", value)
+				request.Header.Set("Traceparent", value)
 			}
 			response := httptest.NewRecorder()
 			server.Handler().ServeHTTP(response, request)

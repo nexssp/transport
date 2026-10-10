@@ -13,13 +13,19 @@ repos:
 
   - repo: local
     hooks:
-      - id: golangci-lint
-        name: golangci-lint (fix)
-        entry: task lint:fix
+      - id: lint-nflow
+        name: lint:nflow
+        entry: task lint:nflow
         language: system
         pass_filenames: false
         types: [go]
-        stages: [pre-commit]
+
+      - id: golangci-lint
+        name: golangci-lint (new)
+        entry: task lint:new
+        language: system
+        pass_filenames: false
+        types: [go]
 
       - id: go-test
         name: go test

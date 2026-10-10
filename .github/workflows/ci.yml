@@ -1,4 +1,4 @@
-name: CI
+name: Go CI
 
 on:
   push:
@@ -7,17 +7,18 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   verify:
+    name: build · lint · test
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    timeout-minutes: 15
 
-      - uses: actions/setup-go@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -26,20 +27,36 @@ jobs:
         uses: arduino/setup-task@v2
         with:
           version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compile all Go packages
+      # Fast binary install (~2s), isolates linter dependencies from go.mod
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9.3.0
+        with:
+          version: v2.14.0
+          install-only: true
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          task tidy
+          if [ -n "$(git status --porcelain -- go.mod go.sum)" ]; then
+            echo "::error::go.mod or go.sum is not tidy. Run 'task tidy' locally and commit the result."
+            git status --porcelain -- go.mod go.sum
+            git diff -- go.mod go.sum
+            exit 1
+          fi
+
+      - name: Tools
+        run: task tools
+
+      - name: Build
         run: task build
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: latest
+      - name: Run CI gate
+        run: task ci
 
-      - name: Run Go tests with race detector
-        run: task test:race
+      - name: Benchmark smoke check
+        run: task bench
 
-      - name: Install nflow CLI
-        run: go install github.com/nexssp/flow/cmd/nflow@main
-
-      - name: Lint all Flow examples
-        run: nflow lint ./examples/...
+      - name: Run examples
+        run: task examples

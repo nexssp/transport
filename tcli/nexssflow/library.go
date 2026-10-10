@@ -15,7 +15,7 @@ import (
 )
 
 type Config struct {
-	Executable string `flow:"executable"`
+	Executable string `nflow:"executable"`
 }
 
 func init() {

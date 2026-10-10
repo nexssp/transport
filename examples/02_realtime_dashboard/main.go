@@ -3,7 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"errors"
+	"log/slog"
 	"math/rand/v2"
 	"os"
 	"os/signal"
@@ -17,7 +18,7 @@ import (
 )
 
 type BroadcastReq struct {
-	Message string `json:"message" cli:"message,m" validate:"required"`
+	Message string `json:"message" validate:"required" cli:"message,m"`
 }
 
 func main() {
@@ -44,7 +45,8 @@ func main() {
 		cli := tcli.New(tcli.WithArgs(os.Args[1:]...))
 		cli.Mount([]action.AnyAction{broadcastAction})
 		if _, err := cli.Do(context.Background(), nil); err != nil {
-			log.Fatal(err)
+			slog.Error("cli transport stopped with error", "error", err)
+			os.Exit(1)
 		}
 		return
 	}
@@ -57,8 +59,8 @@ func main() {
 	defer stop()
 
 	go func() {
-		if _, err := httpServer.Do(ctx, nil); err != nil {
-			log.Fatal(err)
+		if _, err := httpServer.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("http transport stopped with error", "error", err)
 		}
 	}()
 
@@ -71,17 +73,21 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				data, _ := json.Marshal(map[string]any{
+				data, err := json.Marshal(map[string]any{
 					"time":  time.Now().Format(time.RFC3339),
 					"value": rand.IntN(100), //nolint:gosec // demo dashboard metric, not a security decision
 				})
+				if err != nil {
+					slog.Error("marshal broadcast payload failed", "error", err)
+					return
+				}
 				broadcaster.Publish("dashboard", data)
 			}
 		}
 	}()
 
-	log.Println("🌐 Dashboard server running on http://localhost:8080")
-	log.Println("   Open http://localhost:8080/events in your browser")
-	log.Println("   Try: go run . broadcast --message 'Hello from CLI!'")
+	slog.Info("🌐 Dashboard server running on http://localhost:8080")
+	slog.Info("   Open http://localhost:8080/events in your browser")
+	slog.Info("   Try: go run . broadcast --message 'Hello from CLI!'")
 	<-ctx.Done()
 }

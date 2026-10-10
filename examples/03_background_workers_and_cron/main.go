@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync/atomic"
@@ -43,13 +44,13 @@ func main() {
 	defer stop()
 
 	go func() {
-		if _, err := cronTransport.Do(ctx, nil); err != nil {
-			log.Printf("Cron transport error: %v", err)
+		if _, err := cronTransport.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("cron transport stopped with error", "error", err)
 		}
 	}()
 	go func() {
-		if _, err := workerTransport.Do(ctx, nil); err != nil {
-			log.Printf("Worker transport error: %v", err)
+		if _, err := workerTransport.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("worker transport stopped with error", "error", err)
 		}
 	}()
 

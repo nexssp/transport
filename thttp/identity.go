@@ -50,7 +50,7 @@ func PopulateFromRequest(ctx context.Context, r *http.Request) context.Context {
 	if r == nil {
 		return ctx
 	}
-	traceID, spanID, ok := parseTraceparent(r.Header.Get("traceparent"))
+	traceID, spanID, ok := parseTraceparent(r.Header.Get("Traceparent"))
 	if !ok {
 		traceID, spanID = "", ""
 	}

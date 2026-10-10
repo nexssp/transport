@@ -16,8 +16,8 @@ import (
 )
 
 type Config struct {
-	Addr    string        `flow:"addr" default:":8080"`
-	Timeout time.Duration `flow:"timeout" default:"30s"`
+	Addr    string        `nflow:"addr" default:":8080"`
+	Timeout time.Duration `nflow:"timeout" default:"30s"`
 }
 
 func init() {

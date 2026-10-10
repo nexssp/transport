@@ -1,13 +1,13 @@
 module github.com/nexssp/transport
 
-go 1.26.0
+go 1.26.9
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/nexssp/flow v0.17.1
-	github.com/nexssp/kernel v0.27.4
+	github.com/nexssp/flow v0.22.0
+	github.com/nexssp/kernel v0.28.0
 	github.com/robfig/cron/v3 v3.0.1
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.24.0
 )
 
 require (

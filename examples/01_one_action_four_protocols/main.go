@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"time"
@@ -64,26 +66,34 @@ func main() {
 	httpServer := thttp.New(":8080")
 	httpServer.Mount([]action.AnyAction{orderAction})
 	go func() {
-		_, _ = httpServer.Do(ctx, nil)
+		if _, err := httpServer.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("http transport stopped with error", "error", err)
+		}
 	}()
 
 	// ─── 2. CLI Runner ───────────────────────────────────────────────────
 	cli := tcli.New(tcli.WithArgs("order:create", "-p=CLI_1", "-q=3"))
 	cli.Mount([]action.AnyAction{orderAction})
 	fmt.Println("💻 [1/4] Testing CLI Trigger:")
-	_, _ = cli.Do(ctx, nil)
+	if _, err := cli.Do(ctx, nil); err != nil {
+		slog.Error("cli transport stopped with error", "error", err)
+	}
 
 	// ─── 3. In-Memory Event Bus ──────────────────────────────────────────
 	busTransport := tbus.New(eventBus)
 	busTransport.Mount([]action.AnyAction{orderAction})
 	fmt.Println("\n⚡ [2/4] Testing In-Memory Bus Trigger:")
-	_ = busTransport.Publish(ctx, "order.create", OrderReq{ProductID: "BUS_1", Quantity: 5})
+	if err := busTransport.Publish(ctx, "order.create", OrderReq{ProductID: "BUS_1", Quantity: 5}); err != nil {
+		slog.Error("bus publish failed", "error", err)
+	}
 
 	// ─── 4. Cron Scheduler ───────────────────────────────────────────────
 	cronTransport := cron.New()
 	cronTransport.Mount([]action.AnyAction{orderAction})
 	go func() {
-		_, _ = cronTransport.Do(ctx, nil)
+		if _, err := cronTransport.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Error("cron transport stopped with error", "error", err)
+		}
 	}()
 	fmt.Println("\n⏰ [3/4] Cron Scheduler active (auto-triggers every 5s)...")
 

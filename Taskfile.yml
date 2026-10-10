@@ -1,122 +1,99 @@
+# Nexss Ecosystem
+# Copyright 2018-Present Marcin Polak and Contributors
+# SPDX-License-Identifier: Apache-2.0
 version: '3'
 
-# Every command in this file is meant to be run from the transport/.
-# Run `task --list` to see the short descriptions.
 vars:
-  NFLOW: 'go run ../flow/cmd/nflow'
+  NFLOW: 'go run github.com/nexssp/flow/cmd/nflow'
+  BASE:
+    sh: git merge-base HEAD origin/main 2>/dev/null || echo HEAD
+  CENTRAL_REF: 'main'
 
 tasks:
-  default:
-    desc: Show every available task
+  default: { cmds: [task --list --sort none], silent: true }
+
+  build:     { desc: "go build ./...",                       cmds: [go build ./...] }
+  build:bin: { desc: "go build -trimpath -o bin/ ./cmd/...", cmds: [go build -trimpath -o bin/ ./cmd/...] }
+  tidy:      { desc: "go mod tidy",                          cmds: [go mod tidy] }
+  clean:     { desc: "rm -rf bin coverage.out",              cmds: [rm -rf bin coverage.out] }
+
+  test:              { desc: "go tool gotestsum -- -short ./...",         cmds: [go tool gotestsum -- -short ./...] }
+  test:nocache:      { desc: "go tool gotestsum -- -count=1 ./...",        cmds: [go tool gotestsum -- -count=1 ./...] }
+  test:race:         { desc: "go tool gotestsum -- -race -short ./...",   cmds: [go tool gotestsum -- -race -short ./...] }
+  test:race:nocache: { desc: "go tool gotestsum -- -race -count=1 ./...", cmds: [go tool gotestsum -- -race -count=1 ./...] }
+  test:cover:        { desc: "go test -coverprofile=coverage.out ./...",  cmds: [go test -coverprofile=coverage.out -short ./..., go tool cover -func=coverage.out] }
+  bench:             { desc: "go test -run='^$' -bench=. -benchmem ./...",cmds: [go test -run='^$' -bench=. -benchmem ./...] }
+
+  test:smoke: { desc: "go test ./cli/... -race -count=1 -v -run TestSmoke",         cmds: [go test ./cli/... -race -count=1 -v -run TestSmoke] }
+
+  examples:
+    desc: Run curated Flow examples as runtime smoke checks
     cmds:
-      - task --list
+      - '{{.NFLOW}} run examples/00_flow_basics/01_logs_and_debug.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/02_sleep_and_timeout.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/03_dynamic_routing.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/04_data_transformation.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/05_error_fallback.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/06_error_handling_and_retry.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/07_parallel_actions.nflow'
+      - '{{.NFLOW}} run examples/00_flow_basics/08_parallel_api_calls.nflow'
+      - '{{.NFLOW}} run examples/01_secure_pipeline/01_validate_intake.nflow'
+      - '{{.NFLOW}} run examples/01_secure_pipeline/02_conditional_hold_gate.nflow'
+      - '{{.NFLOW}} run examples/01_secure_pipeline/03_bounded_retry_fallback.nflow'
+      - '{{.NFLOW}} run examples/01_secure_pipeline/04_read_scoped_fixture.nflow'
+      - '{{.NFLOW}} run examples/02_progress/showcase.nflow'
+      - '{{.NFLOW}} run examples/02_progress/recovery.nflow'
 
-  # ── build ────────────────────────────────────────────────────────
+  self: {desc: '{{.NFLOW}} self test', cmds: ['{{.NFLOW}} self test']}
 
-  build:
-    desc: Build every Go package
-    cmds:
-      - go build ./...
-
-  # ── test ─────────────────────────────────────────────────────────
-
-  test:
-    desc: Fast short tests (no race detector)
-    cmds:
-      - go test -short -count=1 ./...
-
-  test:race:
-    desc: Race-enabled tests
-    cmds:
-      - go test -race -count=1 ./...
-
-  test:short:
-    desc: Alias for `test`
-    cmds:
-      - task: test
-
-  bench:
-    desc: Run Go benchmarks
-    cmds:
-      - go test ./... -run '^$' -bench=. -benchmem
-
-  # ── nflow examples ───────────────────────────────────────────────
-  #
-  # The .nflow examples live in examples/. They are lint-checked in CI
-  # and can be run manually. They cannot be `run` in CI because every
-  # one of them starts a blocking server or scheduler.
-  #
-  # Lint the default target:   task lint:nflow
-  # Lint a source tree:        task lint:nflow -- ./...
-  # Run one example:           task run -- examples/03_multi_route_api.nflow
+  catalog:
+  desc: Write the compiler catalog to catalog.json
+  cmds:
+    - '{{.NFLOW}} catalog > catalog.json'
 
   lint:nflow:
-    desc: 'Lint Flow sources (default: ./examples/...). Override with: task lint:nflow -- <target>'
+    desc: Lint the bundled examples and spec files
+    cmds:
+      - '{{.NFLOW}} lint ./examples'
+
+  fmt:       { desc: "golangci-lint fmt", cmds: [golangci-lint fmt] }
+  fmt:check: { desc: "golangci-lint fmt --diff", cmds: [golangci-lint fmt --diff] }
+  lint:      { desc: "golangci-lint run", cmds: [golangci-lint run] }
+  lint:new:  { desc: 'golangci-lint run --new-from-rev="BASE"', cmds: ['golangci-lint run --new-from-rev="{{.BASE}}"'] }
+  lint:fix:  { desc: 'golangci-lint run --fix --new-from-rev="BASE"', cmds: ['golangci-lint run --fix --new-from-rev="{{.BASE}}"'] }
+  vuln:      { desc: "go tool govulncheck -show=version ./...", cmds: [go tool govulncheck -show=version ./...] }
+
+  # ── Workflows (Gates) ────────────────────────────────────────────
+
+  pre-commit: { desc: "[fmt:check, lint:new, test]", deps: [fmt:check, lint:new, test] }
+  pre-push:   { desc: "[fmt:check, lint, test:race]", deps: [fmt:check, lint, test:race] }
+  ci:
+    desc: "[fmt:check, lint, test:race:nocache] (parallel + failfast)"
+    deps: [fmt:check, lint, test:race:nocache]
+    output: prefixed
+
+  tools:     { desc: "go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck", cmds: [go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck] }
+
+  setup: { desc: "[setup:files, tools]", deps: [setup:files, tools] }
+
+  setup:files:
+    desc: "Fetch missing repo templates (LICENSE, .gitignore, configs...)"
+    cmds:
+      - |
+        for f in LICENSE NOTICE .gitattributes .gitignore .golangci.yml .pre-commit-config.yaml; do
+          test -f "$f" || { echo "→ Fetching $f..."; curl -sSfL "https://raw.githubusercontent.com/nexssp/.github/{{.CENTRAL_REF}}/$f" -o "$f"; }
+        done
+
+  'ext:new':
+    desc: 'Scaffold a bundle: task ext:new -- my_extension'
     vars:
-      TARGETS: '{{if .CLI_ARGS}}{{.CLI_ARGS}}{{else}}./examples/...{{end}}'
+      NAME: '{{.CLI_ARGS}}'
+    preconditions:
+      - sh: test -n "{{.NAME}}"
+        msg: 'usage: task ext:new -- <go_package_name>'
+      - sh: echo "{{.NAME}}" | rg -q '^[A-Za-z_][A-Za-z0-9_]*$'
+        msg: 'bundle name must be a valid Go package identifier'
+      - sh: test ! -e "extensions/{{.NAME}}"
+        msg: 'extensions/{{.NAME}} already exists'
     cmds:
-      - '{{.NFLOW}} lint {{.TARGETS}}'
-
-  run:
-    desc: 'Run an example: task run -- examples/03_multi_route_api.nflow'
-    cmds:
-      - '{{.NFLOW}} run {{.CLI_ARGS}}'
-
-  # ── quality ──────────────────────────────────────────────────────
-
-  vet:
-    desc: Run go vet across all packages
-    cmds:
-      - go vet ./...
-
-  fmt:
-    desc: Apply configured gofumpt and goimports formatters
-    cmds:
-      - golangci-lint fmt
-
-  fmt:check:
-    desc: Check formatting without rewriting files
-    cmds:
-      - golangci-lint fmt --diff
-
-  lint:
-    desc: Run configured golangci-lint checks
-    cmds:
-      - golangci-lint run ./...
-
-  lint:new:
-    desc: Run golangci-lint only on code changed since origin/main
-    cmds:
-      - golangci-lint run --new-from-rev=origin/main
-
-  lint:fix:
-    desc: Auto-fix on code changed since origin/main
-    cmds:
-      - golangci-lint run --fix --new-from-rev=origin/main
-
-  check:
-    desc: Full local gate — format check, lint, vet, race tests, examples
-    cmds:
-      - task: fmt:check
-      - task: lint
-      - task: vet
-      - task: test:race
-      - task: lint:nflow
-
-  pre-push:
-    desc: Fast pre-push gate — lint of new code and short tests
-    deps:
-      - lint:new
-      - test
-
-  # ── maintenance ──────────────────────────────────────────────────
-
-  tidy:
-    desc: Tidy the transport module
-    cmds:
-      - go mod tidy
-
-  clean:
-    desc: Remove build/test artifacts
-    cmds:
-      - rm -f coverage.txt coverage.html
+      - '{{.NFLOW}} init --bundle "extensions/{{.NAME}}"'

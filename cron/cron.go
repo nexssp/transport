@@ -3,7 +3,7 @@ package cron
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/nexssp/kernel/action"
 	robfig "github.com/robfig/cron/v3"
@@ -52,7 +52,7 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 					if _, err := t.cron.AddFunc(sched, func() {
 						// Cron jobs take no payload.
 						if _, err := ex.ExecuteDecoded(jobCtx, nil); err != nil {
-							log.Printf("cron job failed: %v", err)
+							slog.Error("cron job failed", "error", err)
 						}
 					}); err != nil {
 						return nil, fmt.Errorf("cron AddFunc failed: %w", err)

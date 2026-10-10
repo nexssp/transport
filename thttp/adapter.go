@@ -44,7 +44,6 @@ func WithMethods(methods ...string) AdapterOption {
 	}
 }
 
-//nolint:gocyclo // one-shot generic action adapter; branch count driven by request lifecycle, not logic complexity
 func HTTP[Req, Res any](act *action.BuiltAction[Req, Res], options ...AdapterOption) http.Handler {
 	cfg := AdapterConfig{
 		MaxBodyBytes:        10 << 20,
