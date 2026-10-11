@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport"
@@ -36,7 +36,7 @@ import (
 
 type adapterCase struct {
 	name         string
-	bundle       core.Bundle
+	bundle       compiler.Bundle
 	listenAction string
 	rawModifier  string
 
@@ -295,7 +295,7 @@ func findListenAction(tc adapterCase) action.AnyAction {
 func applyModifier(t *testing.T, tc adapterCase) action.AnyAction {
 	t.Helper()
 
-	table := core.NewModifierTable(tc.bundle.Modifiers...)
+	table := compiler.NewModifierTable(tc.bundle.Modifiers...)
 	probe := action.New("contract_probe", func(context.Context, any) (any, error) {
 		return nil, nil
 	}).Build()

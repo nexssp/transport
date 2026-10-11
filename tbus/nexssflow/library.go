@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/nexssp/flow/contracts"
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
 
@@ -17,15 +17,15 @@ import (
 type Config struct{}
 
 func init() {
-	core.Register("tbus", Bundle)
+	compiler.Register("tbus", Bundle)
 }
 
-func Bundle(_ map[string]string) core.Bundle {
-	return core.Bundle{
+func Bundle(_ map[string]string) compiler.Bundle {
+	return compiler.Bundle{
 		ID:        "tbus",
 		Libraries: []action.Library{Library(bus.New[any]())},
-		Modifiers: []core.Modifier{
-			core.String("topic", func(b *action.Builder[any, any], topic string) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.String("topic", func(b *action.Builder[any, any], topic string) *action.Builder[any, any] {
 				return b.Route(tbus.Topic(topic))
 			}),
 		},

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/extensions/pipeline"
 	"github.com/nexssp/flow/extensions/runtime"
 	flowschema "github.com/nexssp/flow/extensions/schema"
@@ -106,7 +106,7 @@ func runSchemaFlow(t *testing.T, source string, args ...string) schemaRunResult 
 		captured = req
 		return req, nil
 	}).Build()
-	probeBundle := core.Bundle{
+	probeBundle := compiler.Bundle{
 		ID: "schema-cli-test-probe",
 		Libraries: []action.Library{{
 			Name:    "schema-cli-test-probe",
@@ -126,7 +126,7 @@ func runSchemaFlow(t *testing.T, source string, args ...string) schemaRunResult 
 		Actions: []action.AnyAction{listenTriggerAction(tr)},
 	}
 
-	cfg, cfgErr := runner.BuildConfig([]core.Bundle{
+	cfg, cfgErr := runner.BuildConfig([]compiler.Bundle{
 		runtime.Bundle(nil),
 		pipeline.Bundle(nil),
 		flowschema.Bundle(nil),

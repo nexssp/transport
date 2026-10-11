@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nexssp/flow/contracts"
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/thttp"
@@ -21,19 +21,19 @@ type Config struct {
 }
 
 func init() {
-	core.Register("thttp", Bundle)
+	compiler.Register("thttp", Bundle)
 }
 
-func Bundle(opts map[string]string) core.Bundle {
-	cfg, err := core.Decode[Config](opts)
+func Bundle(opts map[string]string) compiler.Bundle {
+	cfg, err := compiler.Decode[Config](opts)
 	if err != nil {
 		panic(err)
 	}
-	return core.Bundle{
+	return compiler.Bundle{
 		ID:        "thttp",
 		Libraries: []action.Library{Library(cfg)},
-		Modifiers: []core.Modifier{
-			core.String("route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.String("route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
 				method := "POST"
 				path := raw
 				if sp := strings.IndexByte(raw, ' '); sp > 0 {

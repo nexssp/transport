@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/extensions/pipeline"
 	"github.com/nexssp/flow/extensions/runtime"
 	"github.com/nexssp/flow/runner"
@@ -45,7 +45,7 @@ func executeCLIFlow(
 		},
 	}
 
-	cfg, cfgErr := runner.BuildConfig([]core.Bundle{
+	cfg, cfgErr := runner.BuildConfig([]compiler.Bundle{
 		runtime.Bundle(nil),
 		pipeline.Bundle(nil),
 		bundle,

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/nexssp/flow/contracts"
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/tworker"
@@ -15,15 +15,15 @@ import (
 type Config struct{}
 
 func init() {
-	core.Register("tworker", Bundle)
+	compiler.Register("tworker", Bundle)
 }
 
-func Bundle(_ map[string]string) core.Bundle {
-	return core.Bundle{
+func Bundle(_ map[string]string) compiler.Bundle {
+	return compiler.Bundle{
 		ID:        "tworker",
 		Libraries: []action.Library{Library()},
-		Modifiers: []core.Modifier{
-			core.Duration("worker", func(b *action.Builder[any, any], interval time.Duration) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.Duration("worker", func(b *action.Builder[any, any], interval time.Duration) *action.Builder[any, any] {
 				return b.Route(tworker.Every(interval))
 			}),
 		},

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/extensions/pipeline"
 	"github.com/nexssp/flow/extensions/runtime"
 	"github.com/nexssp/flow/runner"
@@ -44,7 +44,7 @@ func TestHTTPServer_AutoDiscovery(t *testing.T) {
 
 thttp.listen
 `
-	bundles := []core.Bundle{
+	bundles := []compiler.Bundle{
 		runtime.Bundle(nil),
 		pipeline.Bundle(nil),
 		nexssflow.Bundle(map[string]string{

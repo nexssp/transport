@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nexssp/flow/contracts"
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	flowschema "github.com/nexssp/flow/extensions/schema"
 	"github.com/nexssp/kernel/action"
 
@@ -19,19 +19,19 @@ type Config struct {
 }
 
 func init() {
-	core.Register("tcli", Bundle)
+	compiler.Register("tcli", Bundle)
 }
 
-func Bundle(opts map[string]string) core.Bundle {
-	cfg, err := core.Decode[Config](opts)
+func Bundle(opts map[string]string) compiler.Bundle {
+	cfg, err := compiler.Decode[Config](opts)
 	if err != nil {
 		panic(err)
 	}
-	return core.Bundle{
+	return compiler.Bundle{
 		ID:        "tcli",
 		Libraries: []action.Library{Library(cfg)},
-		Modifiers: []core.Modifier{
-			core.String("cli", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.String("cli", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
 				cmd, desc, _ := strings.Cut(raw, ":")
 				return b.Route(tcli.Command(strings.TrimSpace(cmd), strings.TrimSpace(desc)))
 			}),
@@ -161,12 +161,12 @@ func Library(cfg Config) action.Library {
 
 // RoutingOnlyBundle returns a bundle that registers :cli= as a no-op
 // modifier.
-func RoutingOnlyBundle() core.Bundle {
-	return core.Bundle{
+func RoutingOnlyBundle() compiler.Bundle {
+	return compiler.Bundle{
 		ID:        "tcli.routing",
 		Libraries: []action.Library{{Name: "tcli.routing"}},
-		Modifiers: []core.Modifier{
-			core.String("cli", func(b *action.Builder[any, any], _ string) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.String("cli", func(b *action.Builder[any, any], _ string) *action.Builder[any, any] {
 				return b
 			}),
 		},

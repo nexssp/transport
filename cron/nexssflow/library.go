@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	"github.com/nexssp/flow/contracts"
-	"github.com/nexssp/flow/core"
+	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/cron"
@@ -14,15 +14,15 @@ import (
 type Config struct{}
 
 func init() {
-	core.Register("cron", Bundle)
+	compiler.Register("cron", Bundle)
 }
 
-func Bundle(_ map[string]string) core.Bundle {
-	return core.Bundle{
+func Bundle(_ map[string]string) compiler.Bundle {
+	return compiler.Bundle{
 		ID:        "cron",
 		Libraries: []action.Library{Library()},
-		Modifiers: []core.Modifier{
-			core.String("cron", func(b *action.Builder[any, any], schedule string) *action.Builder[any, any] {
+		Modifiers: []compiler.Modifier{
+			compiler.String("cron", func(b *action.Builder[any, any], schedule string) *action.Builder[any, any] {
 				return b.Route(cron.Cron(schedule))
 			}),
 		},
