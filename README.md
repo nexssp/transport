@@ -1,5 +1,7 @@
 # Nexss Transport
 
+<small>Nexss Flow 🌀 ready</small>
+
 <!-- project-status -->
 
 [![CI](https://github.com/nexssp/transport/actions/workflows/ci.yml/badge.svg)](https://github.com/nexssp/transport/actions/workflows/ci.yml)
@@ -150,7 +152,7 @@ For example, invoke the built application as `app hello --name Julia`. Use `tcli
 
 HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides middleware hooks, request/execution/trace headers, SSE, and direct NDJSON iterator streaming.
 
-### Nexss Flow integration
+### Nexss Flow 🌀 integration
 
 Adapter bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/nexssflow`, and `cron/nexssflow` expose transport listeners and bindings to Nexss Flow programs. Each flow uses `@require` to load its adapter, a binding modifier on a pipeline, and the adapter's listener:
 
@@ -195,6 +197,8 @@ cron.listen
 ```
 
 Run a flow file with `nflow run <file>.nflow`. The repository's fuller HTTP samples are in [`nflows/`](nflows/).
+
+> **WIP — Flow parity:** the bundles currently expose HTTP routes, CLI commands, in-process topic pub/sub, interval workers, and cron listeners as shown above. The generic bus/mediator/task-queue APIs and some advanced HTTP/CLI controls remain Go-only; their Flow-facing equivalents are still being moved over.
 
 ## Development commands
 
