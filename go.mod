@@ -4,8 +4,8 @@ go 1.26.9
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/nexssp/flow v0.27.0
-	github.com/nexssp/kernel v0.31.1
+	github.com/nexssp/flow v0.34.0
+	github.com/nexssp/kernel v0.35.0
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/sync v0.24.0
 )
