@@ -6,8 +6,6 @@
 
 Universal multi-protocol transport layer for `nexss-kernel` actions.
 
-Universal multi-protocol transport layer for `nexss-kernel` actions.
-
 ```text
                   ┌─────────────────────────────────┐
                   │      nexss-kernel actions       │
