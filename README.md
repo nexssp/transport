@@ -1,58 +1,224 @@
-# transport
+# Nexss Transport
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/nexssp/transport.svg)](https://pkg.go.dev/github.com/nexssp/transport)
+<!-- project-status -->
+
 [![CI](https://github.com/nexssp/transport/actions/workflows/ci.yml/badge.svg)](https://github.com/nexssp/transport/actions/workflows/ci.yml)
+[![Latest tag](https://img.shields.io/github/v/tag/nexssp/transport?sort=semver&label=latest%20tag)](https://github.com/nexssp/transport/tags)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nexssp/transport.svg)](https://pkg.go.dev/github.com/nexssp/transport)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-Universal multi-protocol transport layer for `nexss-kernel` actions.
+<!-- /project-status -->
 
-```text
-                  ┌─────────────────────────────────┐
-                  │      nexss-kernel actions       │
-                  └────────────────┬────────────────┘
-                                   │
-         ┌─────────────────────────┼─────────────────────────┐
-         │                         │                         │
-         ▼                         ▼                         ▼
-   thttp (REST/SSE)         tcli (CLI Tool)          tbus (Event Bus)
-   tworker (Workers)        cron (Scheduler)         taskqueue (Task Queue)
+Nexss Transport connects [Nexss Kernel](https://github.com/nexssp/kernel) actions to protocol-specific entry points and runtimes. Adapters translate incoming requests, commands, events, and schedules into typed action executions, while the action handler stays independent of the transport.
+
+A common `transport.Transport` contract provides binding discovery, action mounting, and lifecycle management. An action can carry multiple bindings and be mounted on more than one transport.
+
+> **Scope:** This module includes HTTP and CLI adapters, in-process messaging and scheduling tools, and [Nexss Flow](https://github.com/nexssp/flow) integration. Its bus and task queue are in-memory components, not external brokers or durable storage.
+
+## Architecture
+
+```
+Application / Nexss Flow
+          │
+          ▼
+Typed Nexss Kernel actions
+  .Route(thttp.GET(... )) · .Route(tcli.Command(...)) · other bindings
+          │
+          ▼
+Nexss Transport
+  ├── thttp     HTTP routes, SSE, streaming
+  ├── tcli      commands and flags
+  ├── tbus      in-process event bus
+  ├── tmsg      canonical message envelopes
+  ├── tworker   interval-driven workers
+  └── cron      scheduled actions
+          │
+          └── shared codecs, identity, bus, mediator, and task queue packages
 ```
 
-## Supported Protocols & Transports
+Adapters implement a shared lifecycle: `CanHandle` recognizes their binding types, `Mount` registers actions, and `Do(ctx, ... )` starts a listener or runs the selected command. Long-running transports stop when their context is canceled.
 
-- **`thttp`**: Standard HTTP/REST, Server-Sent Events (SSE), streaming NDJSON, and automatic tag-based binding (`path`, `query`, `header`, `cookie`, `form`).
-- **`tcli`**: CLI commands, subcommands, flag parsing (`cli:"flag,f"`), positional arguments, and automated `--help` generation.
-- **`tbus`**: Zero-allocation, in-process event bus binding with direct memory routing.
-- **`tworker`**: Managed background worker schedules with auto-recovery and isolated request contexts.
-- **`cron`**: Precise cron-scheduled jobs using standard cron syntax or duration intervals.
-- **`taskqueue`**: In-process task queue with priority lanes (`High`, `Normal`, `Low`), retries, dead-letter queue (DLQ), and panic recovery.
-- **`mediator`**: CQRS-style mediator supporting 1:1 typed commands and 1:N event publishing.
+## Install
 
-## Installation
+Requires **Go 1.26.9 or newer**.
 
-```sh
+```
 go get github.com/nexssp/transport@latest
 ```
 
-## Quick Start
+## Quick start: HTTP
 
-### 1. HTTP Server
+Create a typed action, bind it to a route, then mount it on an HTTP server:
+
 ```go
-server := thttp.New(":8080")
-server.Mount([]action.AnyAction{myAction})
-server.Do(ctx, nil)
+package main
+
+import (
+	"context"
+	"errors"
+	"log"
+	"os"
+	"os/signal"
+
+	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/transport/thttp"
+ )
+
+type HelloRequest struct {
+	Name string `path:"name"`
+}
+
+type HelloResponse struct {
+	Message string `json:"message"`
+}
+
+func main() {
+	hello := action.New("hello", func(_ context.Context, req HelloRequest) (HelloResponse, error) {
+		return HelloResponse{Message: "Hello, " + req.Name}, nil
+	}).Route(thttp.GET("/hello/{name}" )).Build()
+
+	server := thttp.New(":8080" )
+	server.Mount([]action.AnyAction{hello})
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if _, err := server.Do(ctx, nil); err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
+}
 ```
 
-### 2. CLI Tool
-```go
-cli := tcli.New()
-cli.Mount([]action.AnyAction{myAction})
-cli.Do(ctx, nil)
+Run the application and try the route:
+
+```
+curl http://localhost:8080/hello/Maks
 ```
 
-### 3. Background Workers
+The HTTP adapter binds the path parameter to `HelloRequest.Name` and encodes the response as JSON.
+
+## Quick start: CLI
+
+The CLI adapter maps actions to named commands, binds request fields to flags or positionals, and generates help from the command metadata:
+
 ```go
-workerTransport := tworker.New()
-workerTransport.Mount([]action.AnyAction{myAction})
-workerTransport.Do(ctx, nil)
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/transport/tcli"
+ )
+
+type HelloRequest struct {
+	Name string `cli:"name,n"`
+}
+
+func main() {
+	hello := action.New("hello", func(_ context.Context, req HelloRequest) (string, error) {
+		return "Hello, " + req.Name, nil
+	}).Route(tcli.Command("hello", "Greet someone")).Build()
+
+	cli := tcli.New() // Reads os.Args by default.
+	cli.Mount([]action.AnyAction{hello})
+	if _, err := cli.Do(context.Background(), nil); err != nil {
+		log.Fatal(err)
+	}
+}
 ```
+
+For example, invoke the built application as `app hello --name Julia`. Use `tcli.WithArgs(...)` to supply arguments directly, and `tcli.WithOutput(...)` to redirect output in tests or embedded use.
+
+## Transports and packages
+
+| Package | Purpose |
+| --- | --- |
+| [`thttp`](thttp/) | HTTP routes and raw handlers; automatic `path`, `query`, `header`, `cookie`, and `form` binding; middleware; configurable codecs and request limits; categorized error-to-status mapping; Server-Sent Events (SSE); and O(1)-memory NDJSON streaming. |
+| [`tcli`](tcli/) | CLI command routing, aliases, flags, positional arguments, request schemas, generated help, and encoded results. |
+| [`tbus`](tbus/) | Connects action bindings to a concurrent, in-process publish/subscribe bus. |
+| [`tmsg`](tmsg/) and [`message`](message/) | Route protocol-neutral message envelopes through an in-process router, preserving request, execution, and trace identity. |
+| [`tworker`](tworker/) | Run bound actions on intervals with isolated request contexts and optional restart-on-error behavior. |
+| [`cron`](cron/) | Run actions on standard cron schedules or fixed intervals. |
+| [`bus`](bus/) | Generic in-process pub/sub, typed 1:1 command routing, and logging, panic-recovery, and timeout middleware. |
+| [`bus/mediator`](bus/mediator/) | CQRS-style mediator: typed 1:1 commands and 1:N event publishing. |
+| [`bus/taskqueue`](bus/taskqueue/) | In-memory task queue with high, normal, and low priority lanes, worker pools, retries, dead-letter handling, panic recovery, and backpressure. It is not a durable queue. |
+| [`codec`](codec/) | Shared codec interface; JSON is the default implementation. |
+
+### HTTP request binding
+
+HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides middleware hooks, request/execution/trace headers, SSE, and direct NDJSON iterator streaming.
+
+### Nexss Flow integration
+
+Adapter bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/nexssflow`, and `cron/nexssflow` expose transport listeners and bindings to Nexss Flow programs. Each flow uses `@require` to load its adapter, a binding modifier on a pipeline, and the adapter's listener:
+
+```
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
+@pipeline hello:route="GET /hello"
+  runtime.const @{ value: "Hello, Maks" }
+@end
+thttp.listen
+```
+
+```
+@require github.com/nexssp/transport/tcli/nexssflow
+@pipeline hello:cli="hello:Greet someone"
+  runtime.const @{ value: "Hello, Julia" }
+@end
+tcli.listen
+```
+
+```
+@require github.com/nexssp/transport/tbus/nexssflow
+@pipeline orders:topic="orders"
+  runtime.noop
+@end
+tbus.listen
+```
+
+```
+@require github.com/nexssp/transport/tworker/nexssflow
+@pipeline heartbeat:worker=1m
+  runtime.const @{ value: "tick" }
+@end
+tworker.listen
+```
+
+```
+@require github.com/nexssp/transport/cron/nexssflow
+@pipeline hourly:cron="0 * * * *"
+  runtime.const @{ value: "tick" }
+@end
+cron.listen
+```
+
+Run a flow file with `nflow run <file>.nflow`. The repository's fuller HTTP samples are in [`nflows/`](nflows/).
+
+## Development commands
+
+Local workflows and CI use [Task](https://taskfile.dev). Install it once:
+
+```
+go install github.com/go-task/task/v3/cmd/task@latest
+```
+
+List available targets and run the common checks:
+
+```
+task --list
+task test                 # short test suite
+task test -- ./thttp      # test one package
+task test:race            # race-enabled tests
+task bench                # benchmarks with memory statistics
+task ci                   # repository CI gate
+```
+
+## Related projects
+
+- [Nexss Kernel](https://github.com/nexssp/kernel) — typed actions and execution runtime.
+
+- [Nexss Flow](https://github.com/nexssp/flow) — flow language and runtime for composing actions.
+
+- [Task](https://taskfile.dev) — task runner used by this repository's local workflows and CI.
