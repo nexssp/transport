@@ -1,14 +1,16 @@
 # Nexss Ecosystem
 # Copyright 2018-Present Marcin Polak and Contributors
 # SPDX-License-Identifier: Apache-2.0
+# Install Task: go install github.com/go-task/task/v3/cmd/task@latest
 version: '3'
 
 vars:
-  NFLOW: 'go tool nflow' # first task tools
+  NFLOW: 'go tool nflow' # requires: task tools (or setup) first
   BASE:
     sh: git merge-base HEAD origin/main 2>/dev/null || echo HEAD
   CENTRAL_REF: 'main'
   PKG: '{{.CLI_ARGS | default "./..."}}'
+  GOTEST: '{{.GOTEST | default "go tool gotestsum --"}}'
 
 tasks:
   default: { cmds: [task --list --sort none], silent: true }
@@ -18,49 +20,42 @@ tasks:
   tidy:      { desc: "go mod tidy",                                 cmds: [go mod tidy] }
   clean:     { desc: "rm -rf bin coverage.out",                     cmds: [rm -rf bin coverage.out] }
 
-  test:              { desc: "go tool gotestsum -- -short [./...]",         cmds: ['go tool gotestsum -- -short {{.PKG}}'] }
-  test:nocache:      { desc: "go tool gotestsum -- -count=1 [./...]",       cmds: ['go tool gotestsum -- -count=1 {{.PKG}}'] }
-  test:race:         { desc: "go tool gotestsum -- -race -short [./...]",   cmds: ['go tool gotestsum -- -race -short {{.PKG}}'] }
-  test:race:nocache: { desc: "go tool gotestsum -- -race -count=1 [./...]", cmds: ['go tool gotestsum -- -race -count=1 {{.PKG}}'] }
-  test:cover:        { desc: "go test -coverprofile=coverage.out [./...]",  cmds: ['go test -coverprofile=coverage.out -short {{.PKG}}', go tool cover -func=coverage.out] }
-  bench:             { desc: "go test -run='^$' -bench=. -benchmem [./...]",cmds: ["go test -run='^$' -bench=. -benchmem {{.PKG}}"] }
+  test:              { desc: "{{.GOTEST}} -short [./...]",                       cmds: ['{{.GOTEST}} -short {{.PKG}}'] }
+  test:nocache:      { desc: "{{.GOTEST}} -count=1 [./...]",                     cmds: ['{{.GOTEST}} -count=1 {{.PKG}}'] }
+  test:race:         { desc: "{{.GOTEST}} -race -short [./...]",                 cmds: ['{{.GOTEST}} -race -short {{.PKG}}'] }
+  test:race:nocache: { desc: "{{.GOTEST}} -race -count=1 [./...]",               cmds: ['{{.GOTEST}} -race -count=1 {{.PKG}}'] }
+  test:cover:        { desc: "{{.GOTEST}} -coverprofile=coverage.out [./...]",   cmds: ['{{.GOTEST}} -coverprofile=coverage.out -short {{.PKG}}', go tool cover -func=coverage.out] }
+  bench:             { desc: "{{.GOTEST}} -run='^$' -bench=. -benchmem [./...]", cmds: ["{{.GOTEST}} -run='^$' -bench=. -benchmem {{.PKG}}"] }
+  test:smoke:        { desc: "{{.GOTEST}} ./cli/... -race -count=1 -v -run TestSmoke", cmds: ['{{.GOTEST}} ./cli/... -race -count=1 -v -run TestSmoke'] }
 
-  test:smoke: { desc: "go test ./cli/... -race -count=1 -v -run TestSmoke",         cmds: [go test ./cli/... -race -count=1 -v -run TestSmoke] }
-
-  examples:
-    desc: Lint every .nflow file and boot the server examples under a timeout
-    cmds:
-      - '{{.NFLOW}} lint ./examples'
-      - task test:race:nocache -- -run TestExamplesBoot -timeout 5m
-
-  self: {desc: '{{.NFLOW}} self test', cmds: ['{{.NFLOW}} self test']}
+  self: { desc: '{{.NFLOW}} self test', cmds: ['{{.NFLOW}} self test'] }
 
   catalog:
-  desc: Write the compiler catalog to catalog.json
-  cmds:
-    - '{{.NFLOW}} catalog > catalog.json'
+    desc: Write the compiler catalog to catalog.json
+    cmds:
+      - '{{.NFLOW}} catalog > catalog.json'
 
   lint:nflow:
-    desc: Lint the bundled examples and spec files
+    desc: Lint the in-repository spec files
     cmds:
-      - '{{.NFLOW}} lint ./examples'
+      - '{{.NFLOW}} lint ./spec'
 
-  fmt:       { desc: "golangci-lint fmt", cmds: [golangci-lint fmt] }
-  lint:      { desc: "golangci-lint run", cmds: [golangci-lint run] }
-  lint:new:  { desc: 'golangci-lint run --new-from-rev="BASE"', cmds: ['golangci-lint run --new-from-rev="{{.BASE}}"'] }
-  lint:fix:  { desc: 'golangci-lint run --fix --new-from-rev="BASE"', cmds: ['golangci-lint run --fix --new-from-rev="{{.BASE}}"'] }
-  vuln:      { desc: "go tool govulncheck -show=version [./...]", cmds: ['go tool govulncheck -show=version {{.PKG}}'] }
+  fmt:       { desc: "golangci-lint fmt",                              cmds: [golangci-lint fmt] }
+  lint:      { desc: "golangci-lint run",                              cmds: [golangci-lint run] }
+  lint:new:  { desc: 'golangci-lint run --new-from-rev="BASE"',        cmds: ['golangci-lint run --new-from-rev="{{.BASE}}"'] }
+  lint:fix:  { desc: 'golangci-lint run --fix --new-from-rev="BASE"',  cmds: ['golangci-lint run --fix --new-from-rev="{{.BASE}}"'] }
+  vuln:      { desc: "go tool govulncheck -show=version [./...]",      cmds: ['go tool govulncheck -show=version {{.PKG}}'] }
 
   # ── Workflows (Gates) ────────────────────────────────────────────
 
-  pre-commit: { desc: "[lint:new, test]", deps: [lint:new, test] }
-  pre-push:   { desc: "[lint, test:race]", deps: [lint, test:race] }
+  pre-commit: { desc: "[self, lint, test]",       deps: [self, lint, test] }
+  pre-push:   { desc: "[self, lint, test:race]",  deps: [self, lint, test:race] }
   ci:
     desc: "[lint, test:race:nocache] (parallel + failfast)"
     deps: [lint, test:race:nocache]
     output: prefixed
 
-  tools:     { desc: "go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck github.com/nexssp/flow/cmd/nflow", cmds: [go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck github.com/nexssp/flow/cmd/nflow] }
+  tools: { desc: "go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck github.com/nexssp/flow/cmd/nflow", cmds: [go get -tool gotest.tools/gotestsum golang.org/x/vuln/cmd/govulncheck github.com/nexssp/flow/cmd/nflow] }
 
   setup: { desc: "[setup:files, tools]", deps: [setup:files, tools] }
 
