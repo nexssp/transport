@@ -154,7 +154,7 @@ HTTP request fields can be populated from route parameters, the URL query, heade
 
 ### Nexss Flow 🌀 integration
 
-Adapter bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/nexssflow`, and `cron/nexssflow` expose transport listeners and bindings to Nexss Flow programs. Each flow uses `@require` to load its adapter, a binding modifier on a pipeline, and the adapter's listener:
+Bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/nexssflow`, `cron/nexssflow`, `bus/nexssflow`, `bus/mediator/nexssflow`, and `bus/taskqueue/nexssflow` expose transport listeners, messaging actions, and bindings to Nexss Flow programs. Each flow uses `@require` to load its bundle and, for listeners, a binding modifier on a pipeline:
 
 ```
 @require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
@@ -196,9 +196,39 @@ tworker.listen
 cron.listen
 ```
 
+The generic bus exposes `bus.publish` (input `{ subject, payload }`), `bus.send` (input `{ name, payload }`), and `bus.listen`; bind subscribers with `subject` and command handlers with `command`:
+
+```
+@require github.com/nexssp/transport/bus/nexssflow
+@pipeline orders:subject="orders"
+  runtime.noop
+@end
+bus.listen
+```
+
+The mediator exposes `mediator.send` (input `{ name, payload }`) and `mediator.publish` (input `{ name, payload }`). Register command handlers with `command` and event subscribers with `event`:
+
+```
+@require github.com/nexssp/transport/bus/mediator/nexssflow
+@pipeline createUser:command="users.create"
+  runtime.noop
+@end
+mediator.listen
+```
+
+The task queue exposes `taskqueue.enqueue` (input `{ type, payload, priority }`, where priority is `high`, `normal`, or `low`) and `taskqueue.listen`; bind worker pipelines with `task`:
+
+```
+@require github.com/nexssp/transport/bus/taskqueue/nexssflow
+@pipeline sendEmail:task="email.send"
+  runtime.noop
+@end
+taskqueue.listen
+```
+
 Run a flow file with `nflow run <file>.nflow`. The repository's fuller HTTP samples are in [`nflows/`](nflows/).
 
-> **WIP — Flow parity:** the bundles currently expose HTTP routes, CLI commands, in-process topic pub/sub, interval workers, and cron listeners as shown above. The generic bus/mediator/task-queue APIs and some advanced HTTP/CLI controls remain Go-only; their Flow-facing equivalents are still being moved over.
+> **Flow parity:** Flow supports HTTP routes, CLI commands, in-process topic pub/sub, interval workers, cron listeners, generic bus pub/sub and commands, mediator commands/events, and task queue producers/workers. Some advanced HTTP/CLI controls remain Go-only.
 
 ## Development commands
 
