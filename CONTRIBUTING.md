@@ -34,8 +34,8 @@ Run the full gate:
 ```bash
 task tidy       # go mod tidy — keep go.mod / go.sum clean
 task fmt        # gofumpt + gci (auto-fix)
-task pre-push   # [fmt:check, lint, test:race]
-task ci         # [fmt:check, lint, test:race:nocache] — exactly what CI runs
+task pre-push   # [lint, test:race]
+task ci         # [lint, test:race:nocache] — CI verification gate
 ```
 
 Optional extra checks when relevant:
@@ -43,15 +43,16 @@ Optional extra checks when relevant:
 ```bash
 task vuln       # govulncheck
 task bench      # benchmark smoke test
-task examples   # run curated .nflow files as runtime smoke checks
-task lint:nflow # lint ./examples and ./spec
-task self       # nflow self test
-task test:smoke # CLI smoke test
+task test:cover # short tests with coverage
 ```
 
-Run `task examples`, `task lint:nflow`, or `task test:smoke` whenever you touch
-the compiler, the DSL, `.nflow` files, or CLI wiring. A green `task test` is not
-enough on its own in those cases.
+For focused checks, pass package paths and Go flags after `--`, for example
+`task test -- ./tcli/... -run TestName` or `task lint -- ./message`.
+Package-taking tasks use `./...` when no arguments are supplied.
+Tests use `go test` by default. To use the optionally installed gotestsum,
+run `task test GOTEST='gotestsum --' -- ./message`.
+Transport is a library: Flow compiler self-tests, catalog generation, spec linting,
+and Flow CLI/bundle tasks belong in the Flow repository, not this Taskfile.
 
 ## Requirements
 
@@ -59,10 +60,10 @@ enough on its own in those cases.
 - A performance claim requires a benchmark on a documented Go version and hardware.
 - New dependencies require a clear reason, license review, and evidence that the
   dependency is not better placed in an adapter module.
-- Keep business rules, transports, hosted services, and provider-specific
+- Keep business rules, hosted services, and provider-specific
   behavior outside this repository.
-- New DSL features must use the existing extension/bundle mechanism — scaffold
-  with `task ext:new -- <go_package_name>` rather than hand-rolling the layout.
+- Flow integration changes should include focused tests in the relevant
+  transport adapter package; compiler and DSL changes belong in Flow.
 - Do not add `testify` or other assertion helpers; use `xtest` / `xtest/ktest`.
 
 ## Local pre-commit (optional)
@@ -75,7 +76,7 @@ pre-commit install
 prek install
 ```
 
-Hooks are wired to `task pre-commit` (on commit) and `task pre-push` (on push),
+Commit hooks run `task lint:new` and `task test`; push hooks run `task pre-push`,
 so **Task must be installed first** — see the Toolchain section above.
 
 ## Getting help

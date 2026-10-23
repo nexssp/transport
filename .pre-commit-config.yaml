@@ -13,13 +13,6 @@ repos:
 
   - repo: local
     hooks:
-      - id: lint-nflow
-        name: lint:nflow
-        entry: task lint:nflow
-        language: system
-        pass_filenames: false
-        types: [go]
-
       - id: golangci-lint
         name: golangci-lint (new)
         entry: task lint:new
@@ -36,7 +29,7 @@ repos:
         stages: [pre-commit]
 
       - id: pre-push
-        name: pre-push (lint new code + short tests, parallel)
+        name: pre-push (lint + race tests, parallel)
         entry: task pre-push
         language: system
         pass_filenames: false
