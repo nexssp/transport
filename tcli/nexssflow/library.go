@@ -76,7 +76,7 @@ func requestSchemasFromMeta(meta map[string]any) (map[string]tcli.CLIRequestSche
 			switch strings.TrimSpace(key) {
 			case "cli":
 				hasCLI = true
-			case "schema":
+			case "request-schema":
 				schemaName = strings.TrimSpace(value)
 			}
 		}

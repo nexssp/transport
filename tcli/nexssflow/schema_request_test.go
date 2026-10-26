@@ -34,7 +34,8 @@ const pipelineWithSchemaCLI = `
   MaxLines int ` + "`json:\"max_lines\" cli:\"max-lines,L\" usage:\"maximum source lines\"`" + `
 }
 
-@pipeline pack:cli="pack:Package source context":schema=PackConfig
+@pipeline pack:cli="pack:Package source context"
+  :request-schema=PackConfig
   probe.capture
 @end
 
@@ -46,7 +47,8 @@ const schemaWithoutCLITags = `
   Name string ` + "`json:\"name\"`" + `
 }
 
-@pipeline pack:cli="pack:No CLI schema":schema=NoCLI
+@pipeline pack:cli="pack:No CLI schema"
+  :request-schema=NoCLI
   probe.capture
 @end
 
@@ -54,7 +56,8 @@ tcli.listen
 `
 
 const schemaUnknownReference = `
-@pipeline pack:cli="pack:Unknown schema":schema=DoesNotExist
+@pipeline pack:cli="pack:Unknown schema"
+  :request-schema=DoesNotExist
   probe.capture
 @end
 
@@ -67,7 +70,8 @@ const schemaAliasCollision = `
   B string ` + "`json:\"b\" cli:\"shared\"`" + `
 }
 
-@pipeline pack:cli="pack:Collision":schema=Colliding
+@pipeline pack:cli="pack:Collision"
+  :request-schema=Colliding
   probe.capture
 @end
 
@@ -80,7 +84,8 @@ const schemaWithPositional = `
   Ext   string   ` + "`json:\"ext\" cli:\"ext\"`" + `
 }
 
-@pipeline collect:cli="collect:Collect files":schema=WithPositional
+@pipeline collect:cli="collect:Collect files"
+  :request-schema=WithPositional
   probe.capture
 @end
 
