@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport"
@@ -111,6 +112,9 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 // then returns ctx.Err() so callers can distinguish clean shutdown from
 // a crash.
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
+	if ctx.Err() == nil {
+		contracts.SignalReady(ctx)
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }

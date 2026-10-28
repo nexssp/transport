@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 )
 
@@ -34,50 +35,43 @@ func TestFlowBusPublishAndSendReachBoundActions(t *testing.T) {
 		return map[string]string{"order_id": req.ID}, nil
 	}).Route(Command("orders.lookup")).Build()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ready := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
 	defer cancel()
 	listenDone := make(chan error, 1)
 	go func() {
 		_, err := action.InvokeAny(ctx, listen, []action.AnyAction{subscriber, command})
 		listenDone <- err
 	}()
-
-	deadline := time.After(2 * time.Second)
-	for {
-		_, _ = action.InvokeAny(context.Background(), publish, map[string]any{
-			"subject": "alerts",
-			"payload": map[string]any{"text": "ready"},
-		})
-		select {
-		case got := <-received:
-			if got != "ready" {
-				t.Fatalf("subscriber received %q, want %q", got, "ready")
-			}
-			goto commandTest
-		case <-deadline:
-			t.Fatal("timed out waiting for Flow bus subscriber")
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	select {
+	case <-ready.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("bus listener did not signal readiness after registering handlers")
 	}
 
-commandTest:
+	if _, err := action.InvokeAny(context.Background(), publish, map[string]any{
+		"subject": "alerts",
+		"payload": map[string]any{"text": "ready"},
+	}); err != nil {
+		t.Fatalf("publish event: %v", err)
+	}
+	select {
+	case got := <-received:
+		if got != "ready" {
+			t.Fatalf("subscriber received %q, want %q", got, "ready")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Flow bus subscriber")
+	}
+
 	var response any
-	for {
-		var err error
-		response, err = action.InvokeAny(context.Background(), send, map[string]any{
-			"name":    "orders.lookup",
-			"payload": map[string]any{"id": "order-42"},
-		})
-		if err == nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("command handler did not become available: %v", err)
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	var err error
+	response, err = action.InvokeAny(context.Background(), send, map[string]any{
+		"name":    "orders.lookup",
+		"payload": map[string]any{"id": "order-42"},
+	})
+	if err != nil {
+		t.Fatalf("send command: %v", err)
 	}
 	result, ok := response.(map[string]string)
 	if !ok || result["order_id"] != "order-42" {

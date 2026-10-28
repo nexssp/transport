@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
@@ -100,6 +101,10 @@ func WithBroadcaster(b StreamBroadcaster) Option {
 
 func WithReadTimeout(d time.Duration) Option  { return func(t *Transport) { t.readTimeout = d } }
 func WithWriteTimeout(d time.Duration) Option { return func(t *Transport) { t.writeTimeout = d } }
+func WithReadHeaderTimeout(d time.Duration) Option {
+	return func(t *Transport) { t.readHeaderTimeout = d }
+}
+func WithIdleTimeout(d time.Duration) Option { return func(t *Transport) { t.idleTimeout = d } }
 
 func WithIdempotencyResponseLimit(limit int) Option {
 	return func(t *Transport) {
@@ -200,6 +205,12 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 			serveErr <- fmt.Errorf("http server crash: %w", err)
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		_ = server.Close()
+		<-serveDone
+		return nil, err
+	}
+	contracts.SignalReady(ctx)
 
 	select {
 	case err := <-serveErr:
@@ -241,13 +252,18 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.Ha
 		}
 
 		res, err := ex.ExecuteDecoded(ctx, func(v any) error {
-			if d, ok := v.(HTTPDecoder); ok {
-				return d.FromHTTPRequest(r)
-			}
-
 			// Automatic struct tag binding (path, query, header, cookie, form)
 			if err := BindFromTags(v, r); err != nil {
 				return err
+			}
+			if err := BindMapFromHTTPRequest(v, r); err != nil {
+				return err
+			}
+			// NFlow pipeline decoders still receive path/query data in their map
+			// input, then decode a JSON body so explicitly supplied body fields
+			// retain their established precedence.
+			if d, ok := v.(HTTPDecoder); ok {
+				return d.FromHTTPRequest(r)
 			}
 
 			// Skip body decoding for methods without request payload

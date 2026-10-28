@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xctx"
 	"github.com/nexssp/kernel/xerr"
@@ -102,6 +103,9 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 }
 
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
+	if ctx.Err() == nil {
+		contracts.SignalReady(ctx)
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }

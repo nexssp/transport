@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -11,13 +12,48 @@ import (
 	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 
 	"github.com/nexssp/transport/thttp"
+	httpmiddleware "github.com/nexssp/transport/thttp/middleware"
 )
 
 type Config struct {
-	Addr    string        `nflow:"addr" default:":8080"`
-	Timeout time.Duration `nflow:"timeout" default:"30s"`
+	Addr              string        `nflow:"addr" default:":8080"`
+	ReadHeaderTimeout time.Duration `nflow:"read_header_timeout" default:"5s"`
+	ReadTimeout       time.Duration `nflow:"read_timeout" default:"30s"`
+	WriteTimeout      time.Duration `nflow:"write_timeout" default:"30s"`
+	IdleTimeout       time.Duration `nflow:"idle_timeout" default:"120s"`
+	SecurityHeaders   bool          `nflow:"security_headers" default:"false"`
+}
+
+// RuntimeConfig overrides bundle-level server settings for one listener
+// invocation. It is useful when the host chooses its bind address at runtime.
+type RuntimeConfig struct {
+	Addr              string
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ActionFilter      func(action.AnyAction) bool
+}
+
+var runtimeConfigKey = xctx.NewKey[RuntimeConfig]("transport.thttp.runtime_config")
+
+// WithRuntimeConfig attaches per-invocation listener settings to ctx.
+func WithRuntimeConfig(ctx context.Context, cfg RuntimeConfig) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return runtimeConfigKey.With(ctx, cfg)
+}
+
+func runtimeConfigFromContext(ctx context.Context) RuntimeConfig {
+	if ctx == nil {
+		return RuntimeConfig{}
+	}
+	cfg, _ := runtimeConfigKey.From(ctx)
+	return cfg
 }
 
 func init() {
@@ -34,7 +70,7 @@ func Bundle(opts map[string]string) compiler.Bundle {
 		Libraries: []action.Library{Library(cfg)},
 		Modifiers: []compiler.Modifier{
 			compiler.String("route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
-				method := "POST"
+				method := http.MethodPost
 				path := raw
 				if sp := strings.IndexByte(raw, ' '); sp > 0 {
 					method = strings.ToUpper(strings.TrimSpace(raw[:sp]))
@@ -68,12 +104,10 @@ type httpWorkload struct {
 //  1. action.Library or []action.AnyAction — explicit, authoritative.
 //  2. map[string]any — a route table (either bare or under "routes:").
 //     This is only treated as explicit when it resolves to at least one
-//     action. A bare `thttp.listen` atom receives the pipeline's current
-//     value as its workload; when that value is nil or an empty map, it
-//     is not an explicit routing decision and must fall through to
-//     auto-discovery.
-//  3. resolver from context — auto-discovery of every action that
-//     carries an HTTPRoute binding.
+//     action. A bare thttp.listen atom receives the pipeline's current value
+//     as its workload; when empty, it falls through to auto-discovery.
+//  3. resolver from context — auto-discovery of every binding supported by
+//     the HTTP transport, including HTTPRoute, SSERoute, and RawHTTPHandler.
 func resolveHTTPWorkload(ctx context.Context, workload any, defaultAddr string) (httpWorkload, error) {
 	switch w := workload.(type) {
 	case action.Library:
@@ -89,9 +123,7 @@ func resolveHTTPWorkload(ctx context.Context, workload any, defaultAddr string) 
 		if len(resolved.actions) > 0 {
 			return resolved, nil
 		}
-		// Empty/unresolvable route map falls through to discovery.
 	}
-
 	return autoDiscoverHTTPWorkload(ctx, defaultAddr)
 }
 
@@ -112,34 +144,32 @@ func autoDiscoverHTTPWorkload(ctx context.Context, defaultAddr string) (httpWork
 	if !ok {
 		return httpWorkload{}, fmt.Errorf("thttp.listen: resolver (%T) does not implement Actions()", resolver)
 	}
-
 	allActions := lister.Actions()
-	discovered := filterHTTPRoutedActions(allActions)
+	var server thttp.Transport
+	discovered := filterHTTPBoundActions(allActions, server.CanHandle)
+	if filter := runtimeConfigFromContext(ctx).ActionFilter; filter != nil {
+		filtered := discovered[:0]
+		for _, act := range discovered {
+			if filter(act) {
+				filtered = append(filtered, act)
+			}
+		}
+		discovered = filtered
+	}
 	if len(discovered) == 0 {
-		return httpWorkload{}, fmt.Errorf(
-			"thttp.listen: auto-discovery found 0 routed actions. Available in resolver: %v",
-			describeHTTPActions(allActions),
-		)
+		return httpWorkload{}, fmt.Errorf("thttp.listen: auto-discovery found 0 supported actions. Available in resolver: %v", describeHTTPActions(allActions))
 	}
 	return httpWorkload{actions: discovered, addr: defaultAddr}, nil
 }
 
-func filterHTTPRoutedActions(actions []action.AnyAction) []action.AnyAction {
+func filterHTTPBoundActions(actions []action.AnyAction, canHandle func(action.Binding) bool) []action.AnyAction {
 	var out []action.AnyAction
 	for _, act := range actions {
-		if act == nil {
-			continue
-		}
-		if slices.ContainsFunc(act.GetBindings(), isHTTPRouteBinding) {
+		if act != nil && canHandle != nil && slices.ContainsFunc(act.GetBindings(), canHandle) {
 			out = append(out, act)
 		}
 	}
 	return out
-}
-
-func isHTTPRouteBinding(b action.Binding) bool {
-	_, isRoute := b.(thttp.HTTPRoute)
-	return isRoute
 }
 
 func describeHTTPActions(actions []action.AnyAction) []string {
@@ -164,7 +194,7 @@ func resolveHTTPRouteMap(ctx context.Context, routes map[string]any) []action.An
 		if !ok {
 			continue
 		}
-		method := "POST"
+		method := http.MethodPost
 		path := strings.TrimSpace(routeStr)
 		if sp := strings.IndexByte(path, ' '); sp > 0 {
 			method = strings.ToUpper(strings.TrimSpace(path[:sp]))
@@ -191,7 +221,37 @@ func listenTriggerAction(cfg Config) action.AnyAction {
 			return nil, errors.New("thttp.listen: no actions mounted to server")
 		}
 
-		server := thttp.New(resolved.addr, thttp.WithReadTimeout(cfg.Timeout))
+		runtime := runtimeConfigFromContext(ctx)
+		addr := runtime.Addr
+		if addr == "" {
+			addr = resolved.addr
+		}
+		readHeaderTimeout := cfg.ReadHeaderTimeout
+		if runtime.ReadHeaderTimeout > 0 {
+			readHeaderTimeout = runtime.ReadHeaderTimeout
+		}
+		readTimeout := cfg.ReadTimeout
+		if runtime.ReadTimeout > 0 {
+			readTimeout = runtime.ReadTimeout
+		}
+		writeTimeout := cfg.WriteTimeout
+		if runtime.WriteTimeout > 0 {
+			writeTimeout = runtime.WriteTimeout
+		}
+		idleTimeout := cfg.IdleTimeout
+		if runtime.IdleTimeout > 0 {
+			idleTimeout = runtime.IdleTimeout
+		}
+
+		server := thttp.New(addr,
+			thttp.WithReadHeaderTimeout(readHeaderTimeout),
+			thttp.WithReadTimeout(readTimeout),
+			thttp.WithWriteTimeout(writeTimeout),
+			thttp.WithIdleTimeout(idleTimeout),
+		)
+		if cfg.SecurityHeaders {
+			server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
+		}
 
 		toMount := make([]action.AnyAction, 0, len(resolved.actions))
 		for _, act := range resolved.actions {

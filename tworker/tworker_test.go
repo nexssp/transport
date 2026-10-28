@@ -2,10 +2,12 @@ package tworker_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/tworker"
@@ -36,5 +38,36 @@ func TestTransport_WorkerExecution(t *testing.T) {
 	count := counter.Load()
 	if count < 2 {
 		t.Fatalf("expected worker to run at least 2 times, ran %d times", count)
+	}
+}
+
+func TestTransportSignalsReadyAfterWorkersAreStarted(t *testing.T) {
+	act := action.New("test.long_lived_worker", func(_ context.Context, _ struct{}) (string, error) {
+		return "ok", nil
+	}).Route(tworker.Every(time.Hour)).Build()
+	tr := tworker.New()
+	tr.Mount([]action.AnyAction{act})
+
+	signal := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), signal))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := tr.Do(ctx, nil)
+		done <- err
+	}()
+	select {
+	case <-signal.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker transport did not signal readiness")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker transport did not join its workers after cancellation")
 	}
 }

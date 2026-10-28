@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
 
@@ -174,6 +175,10 @@ func LibraryWithBus(eventBus *transportbus.Bus[any]) action.Library {
 			return nil, errors.New("bus.listen: auto-discovery found 0 subject- or command-bound actions")
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		contracts.SignalReady(ctx)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}).

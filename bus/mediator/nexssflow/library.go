@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
 
@@ -175,6 +176,10 @@ func LibraryWithMediator(m *coremediator.Mediator) action.Library {
 			return nil, errors.New("mediator.listen: auto-discovery found 0 command- or event-bound actions")
 		}
 
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		contracts.SignalReady(ctx)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}).

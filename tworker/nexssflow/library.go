@@ -31,9 +31,8 @@ func Bundle(_ map[string]string) compiler.Bundle {
 }
 
 func Library() action.Library {
-	tr := tworker.New()
-
 	listenTrigger := action.New("tworker.listen", func(ctx context.Context, workload any) (any, error) {
+		tr := tworker.New(tworker.OptionsFromContext(ctx))
 		actionsToMount, fallbackName, ok := resolveWorkerWorkload(ctx, workload)
 		if !ok {
 			return nil, errors.New("tworker.listen: no explicit workload and no usable action resolver in context")
@@ -43,6 +42,9 @@ func Library() action.Library {
 		}
 
 		for _, act := range actionsToMount {
+			if act == nil {
+				continue
+			}
 			hasBinding := false
 			for _, b := range act.GetBindings() {
 				if _, ok := b.(tworker.Binding); ok {

@@ -2,14 +2,41 @@ package cron_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/cron"
 )
+
+func TestCronSignalsReadyAfterSchedulerStarts(t *testing.T) {
+	signal := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), signal))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := cron.New().Do(ctx, nil)
+		done <- err
+	}()
+	select {
+	case <-signal.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("cron scheduler did not signal readiness")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cron scheduler did not stop after cancellation")
+	}
+}
 
 func TestCronTransport_ScheduleExecution(t *testing.T) {
 	t.Parallel()

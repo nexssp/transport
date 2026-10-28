@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var ErrChannelFull = errors.New("channel full (backpressure)")
+var (
+	ErrChannelFull    = errors.New("channel full (backpressure)")
+	ErrAlreadyStarted = errors.New("taskqueue: queue has already been started")
+)
 
 // Priority for task lanes.
 type Priority int8
@@ -59,17 +62,18 @@ type Envelope struct {
 
 // Queue is the in‑process task queue.
 type Queue struct {
-	cfg       Config
-	log       *slog.Logger
-	handlers  sync.Map
-	high      chan Envelope
-	normal    chan Envelope
-	low       chan Envelope
-	dlq       chan Envelope
-	startOnce sync.Once
-	done      chan struct{}
-	doneOnce  sync.Once
-	wg        sync.WaitGroup
+	cfg      Config
+	log      *slog.Logger
+	handlers sync.Map
+	high     chan Envelope
+	normal   chan Envelope
+	low      chan Envelope
+	dlq      chan Envelope
+	startMu  sync.Mutex
+	started  bool
+	done     chan struct{}
+	doneOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // New creates a ready Queue (no external deps).
@@ -118,23 +122,62 @@ func (q *Queue) EnqueueAt(_ context.Context, taskType string, payload any, p Pri
 
 // Start begins processing workers. Blocks until ctx is canceled.
 func (q *Queue) Start(ctx context.Context) error {
-	q.startOnce.Do(func() {
-		lanes := []struct {
-			ch      chan Envelope
-			workers int
-			label   string
-		}{
-			{q.high, q.cfg.Workers, "high"},
-			{q.normal, q.cfg.Workers, "normal"},
-			{q.low, max(1, q.cfg.Workers/2), "low"},
+	return q.StartWithReadyCallback(ctx, nil)
+}
+
+// StartWithReadyCallback begins processing workers, then calls onStarted once
+// the worker goroutines have been launched. It blocks until ctx is canceled.
+// The callback is optional and runs outside the queue's worker hot paths.
+// A queue may only be started once; subsequent calls return ErrAlreadyStarted.
+func (q *Queue) StartWithReadyCallback(ctx context.Context, onStarted func()) error {
+	if ctx == nil {
+		return errors.New("taskqueue: context must not be nil")
+	}
+	q.startMu.Lock()
+	if q.started {
+		q.startMu.Unlock()
+		return ErrAlreadyStarted
+	}
+	select {
+	case <-q.done:
+		q.startMu.Unlock()
+		return errors.New("taskqueue: queue has already stopped")
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		q.startMu.Unlock()
+		return err
+	}
+	q.started = true
+	lanes := []struct {
+		ch      chan Envelope
+		workers int
+		label   string
+	}{
+		{q.high, q.cfg.Workers, "high"},
+		{q.normal, q.cfg.Workers, "normal"},
+		{q.low, max(1, q.cfg.Workers/2), "low"},
+	}
+	for _, lane := range lanes {
+		for i := range lane.workers {
+			q.wg.Add(1)
+			go q.worker(ctx, lane.ch, lane.label, i)
 		}
-		for _, lane := range lanes {
-			for i := range lane.workers {
-				q.wg.Add(1)
-				go q.worker(ctx, lane.ch, lane.label, i)
-			}
-		}
-	})
+	}
+	q.startMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		q.closeDone()
+		q.wg.Wait()
+		return err
+	}
+	select {
+	case <-q.done:
+		return errors.New("taskqueue: queue has already stopped")
+	default:
+	}
+	if onStarted != nil {
+		onStarted()
+	}
 	q.log.Info("taskqueue_started",
 		"high_workers", q.cfg.Workers,
 		"normal_workers", q.cfg.Workers,

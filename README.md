@@ -150,7 +150,9 @@ For example, invoke the built application as `app hello --name Julia`. Use `tcli
 
 ### HTTP request binding
 
-HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides middleware hooks, request/execution/trace headers, SSE, and direct NDJSON iterator streaming.
+HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Dynamic `map[string]any` requests also receive URL query and path wildcard values, including the `any` request shape used by materialized Flow pipelines; a decoded JSON body takes precedence for duplicate keys. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides reusable security-header middleware, request/execution/trace headers, SSE, and direct NDJSON iterator streaming. The Flow `thttp.listen` action auto-discovers every supported HTTP binding, including `HTTPRoute`, `SSERoute`, and `RawHTTPHandler`.
+
+When NFlow `security_headers` is enabled, it uses the shared `thttp/middleware.SecurityHeaders` policy and separately marks `/api/` responses `Cache-Control: no-store`. The shared security middleware intentionally does not set CSP; applications serving HTML should provide their own policy.
 
 ### Nexss Flow 🌀 integration
 
@@ -187,6 +189,8 @@ tbus.listen
 @end
 tworker.listen
 ```
+
+`tworker` runs each `:worker` binding immediately, then on its configured interval. A successful result may implement `ContinueWorkerCycle() bool` to request an immediate next cycle (useful for draining work); otherwise the worker waits. `RestartOnError` bindings use Kernel's shared `action.ExponentialBackoff` by default (1s base, 30s maximum). `tworker.Options.Backoff` accepts a custom 1-based `func(attempt int) time.Duration`, including any Kernel action backoff helper. `tworker.WithOptions` supplies a runtime poll-interval override and payload-free lifecycle snapshots (`starting`, `running`, `idle`, `backoff`, `stopped`) without changing action or domain semantics.
 
 ```
 @require github.com/nexssp/transport/cron/nexssflow

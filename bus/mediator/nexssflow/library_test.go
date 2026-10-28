@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 )
 
@@ -34,58 +35,44 @@ func TestFlowMediatorSendAndPublish(t *testing.T) {
 		return evt.ID, nil
 	}).Route(Event("users.created")).Build()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ready := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
 	defer cancel()
 	listenDone := make(chan error, 1)
 	go func() {
 		_, err := action.InvokeAny(ctx, listen, []action.AnyAction{command, subscriber})
 		listenDone <- err
 	}()
+	select {
+	case <-ready.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("mediator listener did not signal readiness after registering handlers")
+	}
 
-	var response any
-	deadline := time.After(2 * time.Second)
-	for {
-		var err error
-		response, err = action.InvokeAny(context.Background(), send, map[string]any{
-			"name":    "users.create",
-			"payload": map[string]any{"name": "Ada"},
-		})
-		if err == nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("command handler did not become available: %v", err)
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	response, err := action.InvokeAny(context.Background(), send, map[string]any{
+		"name":    "users.create",
+		"payload": map[string]any{"name": "Ada"},
+	})
+	if err != nil {
+		t.Fatalf("send command: %v", err)
 	}
 	result, ok := response.(map[string]string)
 	if !ok || result["id"] != "user:Ada" {
 		t.Fatalf("command response = %#v, want id user:Ada", response)
 	}
 
-	for {
-		_, err := action.InvokeAny(context.Background(), publish, map[string]any{
-			"name":    "users.created",
-			"payload": map[string]any{"id": "user:Ada"},
-		})
-		if err == nil {
-			break
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("event handler did not become available: %v", err)
-		default:
-			time.Sleep(time.Millisecond)
-		}
+	if _, err := action.InvokeAny(context.Background(), publish, map[string]any{
+		"name":    "users.created",
+		"payload": map[string]any{"id": "user:Ada"},
+	}); err != nil {
+		t.Fatalf("publish event: %v", err)
 	}
 	select {
 	case got := <-gotEvent:
 		if got != "user:Ada" {
 			t.Fatalf("event id = %q, want user:Ada", got)
 		}
-	case <-deadline:
+	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Flow event subscriber")
 	}
 

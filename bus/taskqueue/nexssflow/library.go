@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	"github.com/nexssp/kernel/xerr"
 
@@ -120,7 +121,7 @@ func LibraryWithQueue(q *corequeue.Queue) action.Library {
 		if registered == 0 {
 			return nil, errors.New("taskqueue.listen: auto-discovery found 0 task-bound actions")
 		}
-		return nil, q.Start(ctx)
+		return nil, q.StartWithReadyCallback(ctx, func() { contracts.SignalReady(ctx) })
 	}).
 		Description("Register task-bound actions and run queue workers until the context is canceled").
 		Tag("transport", "taskqueue").

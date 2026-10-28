@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nexssp/flow/compiler"
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/bus/taskqueue"
@@ -29,13 +30,19 @@ func TestFlowTaskQueueEnqueueRunsTaskBoundAction(t *testing.T) {
 		return req.ID, nil
 	}).Route(Task("orders.process")).Build()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ready := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
 	defer cancel()
 	listenDone := make(chan error, 1)
 	go func() {
 		_, err := action.InvokeAny(ctx, listen, []action.AnyAction{handler})
 		listenDone <- err
 	}()
+	select {
+	case <-ready.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("taskqueue listener did not signal readiness after workers started")
+	}
 
 	if _, err := action.InvokeAny(context.Background(), enqueue, map[string]any{
 		"type":     "orders.process",

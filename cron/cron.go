@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
 	robfig "github.com/robfig/cron/v3"
 
@@ -63,6 +64,9 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	}
 
 	t.cron.Start()
+	if ctx.Err() == nil {
+		contracts.SignalReady(ctx)
+	}
 	<-ctx.Done()
 	<-t.cron.Stop().Done()
 	return nil, ctx.Err()

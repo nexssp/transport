@@ -9,29 +9,17 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nexssp/flow/compiler/contracts"
 )
 
-// waitForTCPReady blocks until a TCP connection to addr succeeds or the
-// timeout expires. The test uses it to synchronize with Do's internal
-// net.Listen call: on a slow or race-instrumented runner the client can
-// otherwise outrun the listener and see ECONNREFUSED before the server
-// has started.
-func waitForTCPReady(t *testing.T, addr string, timeout time.Duration) {
+func waitForReady(t *testing.T, signal *contracts.ReadySignal) {
 	t.Helper()
-
-	dialer := &net.Dialer{Timeout: 50 * time.Millisecond}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		conn, err := dialer.DialContext(ctx, "tcp", addr)
-		cancel()
-		if err == nil {
-			_ = conn.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-signal.Done():
+	case <-time.After(3 * time.Second):
+		t.Fatal("HTTP service did not become ready after binding")
 	}
-	t.Fatalf("server did not start listening on %s within %s", addr, timeout)
 }
 
 func TestDoReturnsStartupFailure(t *testing.T) {
@@ -51,6 +39,50 @@ func TestDoReturnsWhenContextAlreadyCanceled(t *testing.T) {
 	_, err := New("://invalid-address").Do(ctx, nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got error %v, want context.Canceled", err)
+	}
+}
+
+func TestDoSignalsReadyOnlyAfterSuccessfulBind(t *testing.T) {
+	var listenConfig net.ListenConfig
+	probe, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	signal := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), signal))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := New(addr).Do(ctx, nil)
+		done <- err
+	}()
+	waitForReady(t, signal)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error = %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("HTTP service did not stop after cancellation")
+	}
+}
+
+func TestDoDoesNotSignalReadyWhenBindFails(t *testing.T) {
+	signal := contracts.NewReadySignal()
+	_, err := New("://invalid-address").Do(contracts.WithServiceReady(context.Background(), signal), nil)
+	if err == nil {
+		t.Fatal("expected bind failure")
+	}
+	select {
+	case <-signal.Done():
+		t.Fatal("HTTP service signaled ready despite bind failure")
+	default:
 	}
 }
 
@@ -74,7 +106,8 @@ func TestDoGracefullyDrainsInFlightRequest(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ready := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
 	defer cancel()
 	doDone := make(chan error, 1)
 	go func() {
@@ -82,10 +115,7 @@ func TestDoGracefullyDrainsInFlightRequest(t *testing.T) {
 		doDone <- err
 	}()
 
-	// Synchronize with Do's net.Listen call before dispatching the
-	// request. Without this gate the client goroutine races the server
-	// goroutine and can observe ECONNREFUSED on a slower runner.
-	waitForTCPReady(t, addr, 3*time.Second)
+	waitForReady(t, ready)
 
 	requestDone := make(chan error, 1)
 	go func() {
@@ -135,5 +165,67 @@ func TestDoGracefullyDrainsInFlightRequest(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Do did not return after the request drained")
+	}
+}
+
+func TestDoClosesIdleKeepAliveConnectionOnShutdown(t *testing.T) {
+	var listenConfig net.ListenConfig
+	probe, err := listenConfig.Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	transport := New(addr)
+	transport.Mux().HandleFunc("GET /ok", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+	ready := contracts.NewReadySignal()
+	ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
+	defer cancel()
+	doDone := make(chan error, 1)
+	go func() {
+		_, err := transport.Do(ctx, nil)
+		doDone <- err
+	}()
+	waitForReady(t, ready)
+
+	clientTransport := &http.Transport{}
+	defer clientTransport.CloseIdleConnections()
+	client := &http.Client{Transport: clientTransport}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+addr+"/ok", http.NoBody)
+	if err != nil {
+		t.Fatalf("create GET request: %v", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("GET /ok: %v", err)
+	}
+	body, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read response body: %v", readErr)
+	}
+	if closeErr != nil {
+		t.Fatalf("close response body: %v", closeErr)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("response body = %q, want %q", body, "ok")
+	}
+
+	// Leave the client's keep-alive connection idle. Server.Do must close it as
+	// part of graceful shutdown; this separately guards the behavior excluded
+	// from the route auto-discovery test's isolated, non-keep-alive client.
+	cancel()
+	select {
+	case err := <-doDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error: got %v, want context.Canceled", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Do did not close the idle keep-alive connection during shutdown")
 	}
 }
