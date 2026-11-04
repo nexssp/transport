@@ -44,9 +44,14 @@ func Send[Req, Res any](ctx context.Context, m *Mediator, req Req) (Res, error) 
 
 // Subscribe registers a 1:N event handler.
 func Subscribe[E any](m *Mediator, h func(context.Context, E) error) {
+	SubscribeWithCancel(m, h)
+}
+
+// SubscribeWithCancel registers a 1:N event handler and returns a function that removes it.
+func SubscribeWithCancel[E any](m *Mediator, h func(context.Context, E) error) func() {
 	var zero E
 	subject := fmt.Sprintf("%T", zero)
-	m.events.Subscribe(subject, func(ctx context.Context, e Event) error {
+	return m.events.SubscribeWithCancel(subject, func(ctx context.Context, e Event) error {
 		typed, ok := e.(E)
 		if !ok {
 			return fmt.Errorf("%w: got %T, want %T", ErrTypeMismatch, e, zero)

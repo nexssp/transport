@@ -195,22 +195,40 @@ func (q *Queue) worker(ctx context.Context, ch <-chan Envelope, label string, id
 	log := q.log.With("worker", name)
 
 	for {
+		// Prefer shutdown when cancellation and queued work are both ready.
 		select {
 		case <-ctx.Done():
-			// Phase 2: Context canceled — drain remaining messages non-blockingly
-			for {
-				select {
-				case env := <-ch:
-					// Drain tasks with an independent timeout context
-					drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-					q.dispatch(drainCtx, env, log)
-					cancel()
-				default:
-					return
-				}
-			}
+			q.drain(ctx, ch, log)
+			return
+		default:
+		}
+		select {
+		case <-ctx.Done():
+			q.drain(ctx, ch, log)
+			return
 		case env := <-ch:
+			if ctx.Err() != nil {
+				// Cancellation may become ready alongside the receive above.
+				drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				q.dispatch(drainCtx, env, log)
+				cancel()
+				q.drain(ctx, ch, log)
+				return
+			}
 			q.dispatch(ctx, env, log)
+		}
+	}
+}
+
+func (q *Queue) drain(ctx context.Context, ch <-chan Envelope, log *slog.Logger) {
+	for {
+		select {
+		case env := <-ch:
+			drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			q.dispatch(drainCtx, env, log)
+			cancel()
+		default:
+			return
 		}
 	}
 }

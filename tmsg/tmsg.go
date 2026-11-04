@@ -4,6 +4,7 @@ package tmsg
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sync"
 
@@ -86,7 +87,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 			if !ok || topic.Topic == "" {
 				continue
 			}
-			t.router.Subscribe(topic.Topic, func(ctx context.Context, env *message.Envelope) error {
+			if err := t.router.Subscribe(topic.Topic, func(ctx context.Context, env *message.Envelope) error {
 				d, ok := decoderPool.Get().(*payloadDecoder)
 				if !ok {
 					// unreachable in practice: decoderPool.New always returns *payloadDecoder
@@ -97,7 +98,9 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 				d.payload = nil
 				decoderPool.Put(d)
 				return err
-			})
+			}); err != nil {
+				slog.Error("tmsg: failed to subscribe action", "topic", topic.Topic, "error", err)
+			}
 		}
 	}
 }

@@ -58,11 +58,18 @@ type eventEnvelope struct {
 	Payload any
 }
 
+type listenerSession struct{ _ byte }
+
+type actionRegistration struct {
+	session *listenerSession
+	handler action.Executable
+}
+
 type flowMediator struct {
 	mediator *coremediator.Mediator
 	mu       sync.RWMutex
-	commands map[string]action.Executable
-	events   map[string][]action.Executable
+	commands map[string][]actionRegistration
+	events   map[string][]actionRegistration
 }
 
 // Bundle returns the Flow bundle for mediator command and event routing.
@@ -91,13 +98,17 @@ func LibraryWithMediator(m *coremediator.Mediator) action.Library {
 	}
 	state := &flowMediator{
 		mediator: m,
-		commands: make(map[string]action.Executable),
-		events:   make(map[string][]action.Executable),
+		commands: make(map[string][]actionRegistration),
+		events:   make(map[string][]actionRegistration),
 	}
 
 	coremediator.Register(m, func(ctx context.Context, command commandEnvelope) (any, error) {
 		state.mu.RLock()
-		handler := state.commands[command.Name]
+		registrations := state.commands[command.Name]
+		var handler action.Executable
+		if len(registrations) > 0 {
+			handler = registrations[len(registrations)-1].handler
+		}
 		state.mu.RUnlock()
 		if handler == nil {
 			return nil, fmt.Errorf("mediator.send: no command handler for %q", command.Name)
@@ -107,14 +118,14 @@ func LibraryWithMediator(m *coremediator.Mediator) action.Library {
 
 	coremediator.Subscribe(m, func(ctx context.Context, event eventEnvelope) error {
 		state.mu.RLock()
-		handlers := append([]action.Executable(nil), state.events[event.Name]...)
+		handlers := append([]actionRegistration(nil), state.events[event.Name]...)
 		state.mu.RUnlock()
 		if len(handlers) == 0 {
 			return fmt.Errorf("mediator.publish: no event subscribers for %q", event.Name)
 		}
 		var firstErr error
-		for _, handler := range handlers {
-			if _, err := handler.ExecuteDecoded(ctx, flowutil.Decode(event.Payload)); err != nil && firstErr == nil {
+		for _, registration := range handlers {
+			if _, err := registration.handler.ExecuteDecoded(ctx, flowutil.Decode(event.Payload)); err != nil && firstErr == nil {
 				firstErr = err
 			}
 		}
@@ -161,12 +172,15 @@ func LibraryWithMediator(m *coremediator.Mediator) action.Library {
 		if !ok {
 			return nil, errors.New("mediator.listen: no explicit workload and no usable action resolver in context")
 		}
+		session := &listenerSession{}
+		defer state.removeListener(session)
+
 		registered := 0
 		for _, act := range actions {
 			if act == nil {
 				continue
 			}
-			count, err := registerBoundAction(state, act)
+			count, err := registerBoundAction(state, session, act)
 			if err != nil {
 				return nil, err
 			}
@@ -193,7 +207,7 @@ func LibraryWithMediator(m *coremediator.Mediator) action.Library {
 	}
 }
 
-func registerBoundAction(state *flowMediator, act action.AnyAction) (int, error) {
+func registerBoundAction(state *flowMediator, session *listenerSession, act action.AnyAction) (int, error) {
 	ex, executable := act.(action.Executable)
 	if !executable {
 		return 0, nil
@@ -207,7 +221,10 @@ func registerBoundAction(state *flowMediator, act action.AnyAction) (int, error)
 				return registered, errors.New("mediator.listen: command binding name must not be empty")
 			}
 			state.mu.Lock()
-			state.commands[route.Name] = ex
+			state.commands[route.Name] = append(state.commands[route.Name], actionRegistration{
+				session: session,
+				handler: ex,
+			})
 			state.mu.Unlock()
 			registered++
 		case EventBinding:
@@ -215,10 +232,44 @@ func registerBoundAction(state *flowMediator, act action.AnyAction) (int, error)
 				return registered, errors.New("mediator.listen: event binding name must not be empty")
 			}
 			state.mu.Lock()
-			state.events[route.Name] = append(state.events[route.Name], ex)
+			state.events[route.Name] = append(state.events[route.Name], actionRegistration{
+				session: session,
+				handler: ex,
+			})
 			state.mu.Unlock()
 			registered++
 		}
 	}
 	return registered, nil
+}
+
+func (state *flowMediator) removeListener(session *listenerSession) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for name, registrations := range state.commands {
+		remaining := make([]actionRegistration, 0, len(registrations))
+		for _, registration := range registrations {
+			if registration.session != session {
+				remaining = append(remaining, registration)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(state.commands, name)
+		} else {
+			state.commands[name] = remaining
+		}
+	}
+	for name, registrations := range state.events {
+		remaining := make([]actionRegistration, 0, len(registrations))
+		for _, registration := range registrations {
+			if registration.session != session {
+				remaining = append(remaining, registration)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(state.events, name)
+		} else {
+			state.events[name] = remaining
+		}
+	}
 }

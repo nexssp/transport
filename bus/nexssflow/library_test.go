@@ -119,3 +119,166 @@ func findAction(t *testing.T, lib action.Library, name string) action.AnyAction 
 	t.Fatalf("action %q not found in %q", name, lib.Name)
 	return nil
 }
+
+func TestFlowBusListenerRemovesRegistrationsOnRestart(t *testing.T) {
+	lib := Library()
+	listen := findAction(t, lib, "bus.listen")
+	publish := findAction(t, lib, "bus.publish")
+	send := findAction(t, lib, "bus.send")
+
+	type notice struct {
+		Text string `json:"text"`
+	}
+	eventCalls := make(chan string, 4)
+	subscriber := action.New("notice.handler", func(_ context.Context, req notice) (string, error) {
+		eventCalls <- req.Text
+		return req.Text, nil
+	}).Route(Subject("restart-alerts")).Build()
+	command := action.New("command.handler", func(_ context.Context, req notice) (string, error) {
+		return req.Text, nil
+	}).Route(Command("restart-command")).Build()
+	workload := []action.AnyAction{subscriber, command}
+
+	start := func() (context.CancelFunc, <-chan error) {
+		ready := contracts.NewReadySignal()
+		ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
+		done := make(chan error, 1)
+		go func() {
+			_, err := action.InvokeAny(ctx, listen, workload)
+			done <- err
+		}()
+		select {
+		case <-ready.Done():
+		case <-time.After(2 * time.Second):
+			cancel()
+			t.Fatal("bus listener did not become ready")
+		}
+		return cancel, done
+	}
+
+	publishNotice := func(text string) {
+		t.Helper()
+		if _, err := action.InvokeAny(context.Background(), publish, map[string]any{
+			"subject": "restart-alerts",
+			"payload": map[string]any{"text": text},
+		}); err != nil {
+			t.Fatalf("publish event: %v", err)
+		}
+	}
+	callCommand := func() error {
+		_, err := action.InvokeAny(context.Background(), send, map[string]any{
+			"name":    "restart-command",
+			"payload": map[string]any{"text": "command"},
+		})
+		return err
+	}
+	stop := func(cancel context.CancelFunc, done <-chan error) {
+		t.Helper()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("listener error = %v, want context.Canceled", err)
+		}
+	}
+
+	cancel, done := start()
+	publishNotice("first")
+	if got := <-eventCalls; got != "first" {
+		t.Fatalf("first event = %q, want first", got)
+	}
+	if err := callCommand(); err != nil {
+		t.Fatalf("first command: %v", err)
+	}
+	stop(cancel, done)
+	if err := callCommand(); err == nil {
+		t.Fatal("command remained registered after listener cancellation")
+	}
+
+	cancel, done = start()
+	publishNotice("second")
+	if got := <-eventCalls; got != "second" {
+		t.Fatalf("restarted event = %q, want second", got)
+	}
+	if len(eventCalls) != 0 {
+		t.Fatalf("stale event handlers delivered %d duplicate event(s)", len(eventCalls))
+	}
+	if err := callCommand(); err != nil {
+		t.Fatalf("restarted command: %v", err)
+	}
+	stop(cancel, done)
+}
+
+func TestFlowBusConcurrentListenersCleanupIndependently(t *testing.T) {
+	lib := Library()
+	listen := findAction(t, lib, "bus.listen")
+	publish := findAction(t, lib, "bus.publish")
+	send := findAction(t, lib, "bus.send")
+	type notice struct {
+		Text string `json:"text"`
+	}
+	calls := make(chan string, 8)
+	subscriber := action.New("notice.handler", func(_ context.Context, req notice) (string, error) {
+		calls <- req.Text
+		return req.Text, nil
+	}).Route(Subject("overlap-alerts")).Build()
+	command := action.New("command.handler", func(_ context.Context, req notice) (string, error) {
+		return req.Text, nil
+	}).Route(Command("overlap-command")).Build()
+	workload := []action.AnyAction{subscriber, command}
+	start := func() (context.CancelFunc, <-chan error) {
+		ready := contracts.NewReadySignal()
+		ctx, cancel := context.WithCancel(contracts.WithServiceReady(context.Background(), ready))
+		done := make(chan error, 1)
+		go func() {
+			_, err := action.InvokeAny(ctx, listen, workload)
+			done <- err
+		}()
+		select {
+		case <-ready.Done():
+		case <-time.After(2 * time.Second):
+			cancel()
+			t.Fatal("bus listener did not become ready")
+		}
+		return cancel, done
+	}
+	publishNotice := func(value string) {
+		t.Helper()
+		if _, err := action.InvokeAny(context.Background(), publish, map[string]any{
+			"subject": "overlap-alerts", "payload": map[string]any{"text": value},
+		}); err != nil {
+			t.Fatalf("publish event: %v", err)
+		}
+	}
+	stop := func(cancel context.CancelFunc, done <-chan error) {
+		t.Helper()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("listener error = %v, want context.Canceled", err)
+		}
+	}
+
+	cancelFirst, doneFirst := start()
+	cancelSecond, doneSecond := start()
+	publishNotice("both")
+	if len(calls) != 2 {
+		t.Fatalf("active listener calls = %d, want 2", len(calls))
+	}
+	<-calls
+	<-calls
+	stop(cancelFirst, doneFirst)
+	publishNotice("second")
+	if len(calls) != 1 {
+		t.Fatalf("remaining listener calls = %d, want 1", len(calls))
+	}
+	<-calls
+	if _, err := action.InvokeAny(context.Background(), send, map[string]any{
+		"name": "overlap-command", "payload": map[string]any{"text": "still-active"},
+	}); err != nil {
+		t.Fatalf("command from remaining listener: %v", err)
+	}
+	stop(cancelSecond, doneSecond)
+	if _, err := action.InvokeAny(context.Background(), send, map[string]any{
+		"name": "overlap-command", "payload": map[string]any{"text": "after-stop"},
+	}); err == nil {
+		t.Fatal("command remained registered after both listeners stopped")
+	}
+}

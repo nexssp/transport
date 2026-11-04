@@ -101,3 +101,24 @@ func TestTypedBus_MissingHandler(t *testing.T) {
 		t.Fatalf("expected no handler error, got %v", err)
 	}
 }
+
+func TestBusUnsubscribeStopsFutureDeliveries(t *testing.T) {
+	b := bus.New[string]()
+	var received atomic.Int32
+	unsubscribe := b.SubscribeWithCancel("events.restart", func(context.Context, string) error {
+		received.Add(1)
+		return nil
+	})
+
+	if err := b.Publish(context.Background(), "events.restart", "before"); err != nil {
+		t.Fatalf("publish before unsubscribe: %v", err)
+	}
+	unsubscribe()
+	unsubscribe()
+	if err := b.Publish(context.Background(), "events.restart", "after"); err != nil {
+		t.Fatalf("publish after unsubscribe: %v", err)
+	}
+	if got := received.Load(); got != 1 {
+		t.Fatalf("handler calls = %d, want 1", got)
+	}
+}

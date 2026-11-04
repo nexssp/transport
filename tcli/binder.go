@@ -29,14 +29,17 @@ func bindCLITarget(v any, rawArgs []string) error {
 	}
 
 	typ := elem.Type()
-	tagToFieldIndex, boolFields := buildFieldIndex(typ)
+	tagToFieldIndex, boolFields, err := buildFieldIndex(typ)
+	if err != nil {
+		return err
+	}
 
 	flagsMap, positionals, err := parseRawArgs(rawArgs, tagToFieldIndex, boolFields)
 	if err != nil {
 		return err
 	}
 
-	if err := applyFlags(elem, tagToFieldIndex, flagsMap); err != nil {
+	if err := applyFlags(elem, flagsMap); err != nil {
 		return err
 	}
 
@@ -46,20 +49,23 @@ func bindCLITarget(v any, rawArgs []string) error {
 
 // buildFieldIndex maps every CLI/json/lowercased-field-name key to its field index,
 // and records which of those keys refer to boolean fields.
-func buildFieldIndex(typ reflect.Type) (tagToFieldIndex map[string]int, boolFields map[string]bool) {
+func buildFieldIndex(typ reflect.Type) (tagToFieldIndex map[string]int, boolFields map[string]bool, err error) {
 	tagToFieldIndex = make(map[string]int, typ.NumField()*3)
 	boolFields = make(map[string]bool, 4)
 
 	for i := range typ.NumField() {
 		field := typ.Field(i)
 		for _, key := range fieldKeys(field) {
+			if previous, exists := tagToFieldIndex[key]; exists && previous != i {
+				return nil, nil, fmt.Errorf("cli: flag alias %q is assigned to both %q and %q", key, typ.Field(previous).Name, field.Name)
+			}
 			tagToFieldIndex[key] = i
 			if field.Type.Kind() == reflect.Bool {
 				boolFields[key] = true
 			}
 		}
 	}
-	return tagToFieldIndex, boolFields
+	return tagToFieldIndex, boolFields, nil
 }
 
 // fieldKeys returns the set of names under which a struct field can be addressed.
@@ -90,8 +96,8 @@ func parseRawArgs(
 	rawArgs []string,
 	tagToFieldIndex map[string]int,
 	boolFields map[string]bool,
-) (flagsMap map[string][]string, positionals []string, err error) {
-	flagsMap = make(map[string][]string)
+) (flagsMap map[int][]string, positionals []string, err error) {
+	flagsMap = make(map[int][]string)
 
 	for i := 0; i < len(rawArgs); i++ {
 		arg := rawArgs[i]
@@ -107,7 +113,8 @@ func parseRawArgs(
 			continue
 		}
 
-		if _, ok := tagToFieldIndex[key]; !ok {
+		fieldIndex, ok := tagToFieldIndex[key]
+		if !ok {
 			return nil, nil, xerr.BadRequest("unknown flag: -" + key)
 		}
 
@@ -116,7 +123,7 @@ func parseRawArgs(
 			return nil, nil, err
 		}
 		i += consumed
-		flagsMap[key] = append(flagsMap[key], value)
+		flagsMap[fieldIndex] = append(flagsMap[fieldIndex], value)
 	}
 	return flagsMap, positionals, nil
 }
@@ -167,9 +174,9 @@ func resolveFlagValue(
 
 // applyFlags writes parsed flag values into struct fields, accumulating slices
 // and coercing scalars.
-func applyFlags(elem reflect.Value, tagToFieldIndex map[string]int, flagsMap map[string][]string) error {
-	for tagKey, fieldIdx := range tagToFieldIndex {
-		valList, ok := flagsMap[tagKey]
+func applyFlags(elem reflect.Value, flagsMap map[int][]string) error {
+	for fieldIdx := range elem.NumField() {
+		valList, ok := flagsMap[fieldIdx]
 		if !ok || len(valList) == 0 {
 			continue
 		}
@@ -182,7 +189,7 @@ func applyFlags(elem reflect.Value, tagToFieldIndex map[string]int, flagsMap map
 		}
 
 		if err := setFieldValue(fieldVal, valList[len(valList)-1]); err != nil {
-			return fmt.Errorf("flag -%s: %w", tagKey, err)
+			return fmt.Errorf("flag -%s: %w", elem.Type().Field(fieldIdx).Name, err)
 		}
 	}
 	return nil

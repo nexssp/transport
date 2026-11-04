@@ -65,3 +65,23 @@ func TestMediator_EventPublishing(t *testing.T) {
 		t.Fatalf("expected 2 subscribers to receive event, got %d", evtCount.Load())
 	}
 }
+
+func TestMediatorUnsubscribeStopsFutureEvents(t *testing.T) {
+	m := mediator.New()
+	var calls atomic.Int32
+	unsubscribe := mediator.SubscribeWithCancel(m, func(context.Context, UserCreatedEvt) error {
+		calls.Add(1)
+		return nil
+	})
+	event := UserCreatedEvt{ID: "usr_123"}
+	if err := mediator.Publish(context.Background(), m, event); err != nil {
+		t.Fatalf("publish before unsubscribe: %v", err)
+	}
+	unsubscribe()
+	if err := mediator.Publish(context.Background(), m, event); err != nil {
+		t.Fatalf("publish after unsubscribe: %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("subscriber calls = %d, want 1", got)
+	}
+}

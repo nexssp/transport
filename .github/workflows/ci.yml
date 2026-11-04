@@ -55,5 +55,8 @@ jobs:
       - name: Run CI gate
         run: task ci
 
+      - name: Scan for known vulnerabilities
+        run: task vuln
+
       - name: Benchmark smoke check
         run: task bench

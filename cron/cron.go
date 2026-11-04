@@ -16,13 +16,10 @@ var _ transport.Transport = (*Transport)(nil)
 
 type Transport struct {
 	actions []action.AnyAction
-	cron    *robfig.Cron
 }
 
 func New() *Transport {
-	return &Transport{
-		cron: robfig.New(),
-	}
+	return &Transport{}
 }
 
 func (t *Transport) CanHandle(b action.Binding) bool {
@@ -37,6 +34,10 @@ func (t *Transport) String() string {
 func (t *Transport) Mount(actions []action.AnyAction) { t.actions = actions }
 
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
+	// A scheduler belongs to one Do invocation. Reusing a stopped scheduler
+	// would retain jobs whose closures capture the previous run's context.
+	scheduler := robfig.New()
+
 	// Derive a cancellable context for all cron jobs.
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -50,7 +51,7 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 						sched = fmt.Sprintf("@every %s", c.Interval)
 					}
 
-					if _, err := t.cron.AddFunc(sched, func() {
+					if _, err := scheduler.AddFunc(sched, func() {
 						// Cron jobs take no payload.
 						if _, err := ex.ExecuteDecoded(jobCtx, nil); err != nil {
 							slog.Error("cron job failed", "error", err)
@@ -63,11 +64,11 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		}
 	}
 
-	t.cron.Start()
+	scheduler.Start()
 	if ctx.Err() == nil {
 		contracts.SignalReady(ctx)
 	}
 	<-ctx.Done()
-	<-t.cron.Stop().Done()
+	<-scheduler.Stop().Done()
 	return nil, ctx.Err()
 }

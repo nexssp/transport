@@ -12,6 +12,7 @@ import (
 
 var (
 	ErrNilEnvelope   = errors.New("message: nil envelope")
+	ErrNilHandler    = errors.New("message: nil handler")
 	ErrTopicRequired = errors.New("message: topic is required")
 )
 
@@ -42,8 +43,12 @@ func NewRouter() *Router {
 	return &Router{bus: bus.New[*Envelope]()}
 }
 
-func (r *Router) Subscribe(topic string, h Handler) {
+func (r *Router) Subscribe(topic string, h Handler) error {
+	if h == nil {
+		return xerr.BadRequest(ErrNilHandler.Error(), ErrNilHandler)
+	}
 	r.bus.Subscribe(topic, bus.Handler[*Envelope](h))
+	return nil
 }
 
 func (r *Router) Publish(ctx context.Context, env *Envelope) error {

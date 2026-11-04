@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"io"
 	"net/http"
 	"time"
 
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -30,11 +32,19 @@ type capturedResponse struct {
 
 func hashRequest(r *http.Request, cfg action.IdempotencyConfig, key string, body []byte) string {
 	h := sha256.New()
-	_, _ = io.WriteString(h, r.Method)   //nolint:errcheck // hash.Hash.Write never returns error
-	_, _ = io.WriteString(h, r.URL.Path) //nolint:errcheck // hash.Hash.Write never returns error
-	_, _ = h.Write(body)
+	writeHashField := func(value []byte) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write(value)
+	}
+	writeHashField([]byte(r.Method))
+	writeHashField([]byte(r.URL.Path))
+	writeHashField([]byte(r.URL.RawQuery))
+	writeHashField([]byte(r.Header.Get("Content-Type")))
+	writeHashField(body)
 	if cfg.KeyFunc != nil {
-		_, _ = io.WriteString(h, key) //nolint:errcheck // hash.Hash.Write never returns error
+		writeHashField([]byte(key))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -186,7 +196,32 @@ func idempotencyRequest(
 	if key == "" {
 		return body, "", "", true
 	}
+	key = scopeIdempotencyKey(r, key)
 	return body, key, hashRequest(r, cfg, key, body), true
+}
+
+// scopeIdempotencyKey prevents callers sharing a store and client-provided key
+// from replaying one another's responses. Tenant and user values come from the
+// trusted request context, not directly from untrusted headers.
+func scopeIdempotencyKey(r *http.Request, key string) string {
+	tenantID := xctx.TenantIDFrom(r.Context())
+	userID := xctx.UserIDFrom(r.Context())
+	if tenantID == "" && userID == "" {
+		return key
+	}
+
+	h := sha256.New()
+	writeHashField := func(value []byte) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		_, _ = h.Write(length[:])
+		_, _ = h.Write(value)
+	}
+	writeHashField([]byte("transport-idempotency-scope-v1"))
+	writeHashField([]byte(tenantID))
+	writeHashField([]byte(userID))
+	writeHashField([]byte(key))
+	return "transport-idempotency-v1:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func captureHTTPResponse(

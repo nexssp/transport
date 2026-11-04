@@ -47,6 +47,16 @@ func TestRouterRejectsInvalidEnvelope(t *testing.T) {
 	ktest.RequireErrorKind(t, emptyTopicErr, xerr.KindBadRequest)
 }
 
+func TestRouterRejectsNilHandler(t *testing.T) {
+	r := NewRouter()
+	err := r.Subscribe("orders.created", nil)
+	ktest.RequireErrorIs(t, err, ErrNilHandler)
+	ktest.RequireErrorKind(t, err, xerr.KindBadRequest)
+	if err := r.Publish(context.Background(), &Envelope{Topic: "orders.created"}); err != nil {
+		t.Fatalf("publish with rejected nil handler: %v", err)
+	}
+}
+
 func TestRouterPublishZeroAlloc(t *testing.T) {
 	r := NewRouter()
 	var count int

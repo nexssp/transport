@@ -19,6 +19,7 @@ type FormFile struct {
 // handler). maxBytes caps the per-field read below; it does not replace
 // bounding the request body upstream.
 func (f *FormFile) ReadField(r *http.Request, fieldName string, maxBytes int64) error {
+	*f = FormFile{}
 	if maxBytes <= 0 {
 		maxBytes = 10 << 20 // 10 MiB default per-field cap
 	}
@@ -31,12 +32,16 @@ func (f *FormFile) ReadField(r *http.Request, fieldName string, maxBytes int64) 
 	}
 	defer file.Close()
 
-	f.Filename = header.Filename
-	f.ContentType = header.Header.Get("Content-Type")
-	f.Bytes, err = io.ReadAll(io.LimitReader(file, maxBytes+1))
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
 	if err != nil {
 		return xerr.BadRequest("failed reading uploaded file")
 	}
+	if int64(len(data)) > maxBytes {
+		return xerr.BadRequest("uploaded file exceeds per-field size limit")
+	}
+	f.Filename = header.Filename
+	f.ContentType = header.Header.Get("Content-Type")
+	f.Bytes = data
 	return nil
 }
 

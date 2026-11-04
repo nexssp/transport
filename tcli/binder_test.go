@@ -278,3 +278,42 @@ func TestBinder_NegativeNumberAsSeparateValue(t *testing.T) {
 		t.Fatalf("expected Ratio around -3.14, got %v", captured.Ratio)
 	}
 }
+
+func TestBinderRejectsAliasCollisionsAndUsesArgumentOrder(t *testing.T) {
+	t.Run("rejects collisions across fields", func(t *testing.T) {
+		type CollisionReq struct {
+			First  string `cli:"shared"`
+			Second string `cli:"shared"`
+		}
+		act := action.New("test.aliascollision", func(_ context.Context, _ CollisionReq) (string, error) {
+			return "unexpected", nil
+		}).Route(tcli.Command("alias-collision", "Alias collision")).Build()
+		var stdout, stderr bytes.Buffer
+		cli := tcli.New(tcli.WithArgs("alias-collision", "--shared=value"), tcli.WithOutput(&stdout, &stderr))
+		cli.Mount([]action.AnyAction{act})
+		_, err := cli.Do(context.Background(), nil)
+		if err == nil || !strings.Contains(err.Error(), `flag alias "shared"`) {
+			t.Fatalf("collision error = %v, want duplicate alias rejection", err)
+		}
+	})
+
+	t.Run("applies aliases in argv order", func(t *testing.T) {
+		type AliasReq struct {
+			Name string `cli:"n,name"`
+		}
+		var captured AliasReq
+		act := action.New("test.aliasorder", func(_ context.Context, req AliasReq) (string, error) {
+			captured = req
+			return "ok", nil
+		}).Route(tcli.Command("alias-order", "Alias order")).Build()
+		var stdout, stderr bytes.Buffer
+		cli := tcli.New(tcli.WithArgs("alias-order", "--name=first", "-n=last"), tcli.WithOutput(&stdout, &stderr))
+		cli.Mount([]action.AnyAction{act})
+		if _, err := cli.Do(context.Background(), nil); err != nil {
+			t.Fatalf("CLI returned error: %v", err)
+		}
+		if captured.Name != "last" {
+			t.Fatalf("Name = %q, want last value in argv order", captured.Name)
+		}
+	})
+}

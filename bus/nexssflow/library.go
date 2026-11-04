@@ -53,11 +53,18 @@ type commandEnvelope struct {
 	Payload any
 }
 
+type listenerSession struct{ _ byte }
+
+type commandRegistration struct {
+	session *listenerSession
+	handler action.Executable
+}
+
 type flowBus struct {
 	events   *transportbus.Bus[any]
 	commands *transportbus.TypedBus
 	mu       sync.RWMutex
-	handlers map[string]action.Executable
+	handlers map[string][]commandRegistration
 }
 
 // Bundle returns the Flow bundle for generic bus pub/sub and command routing.
@@ -87,11 +94,15 @@ func LibraryWithBus(eventBus *transportbus.Bus[any]) action.Library {
 	state := &flowBus{
 		events:   eventBus,
 		commands: transportbus.NewTyped(),
-		handlers: make(map[string]action.Executable),
+		handlers: make(map[string][]commandRegistration),
 	}
 	transportbus.Register(state.commands, func(ctx context.Context, command commandEnvelope) (any, error) {
 		state.mu.RLock()
-		handler := state.handlers[command.Name]
+		registrations := state.handlers[command.Name]
+		var handler action.Executable
+		if len(registrations) > 0 {
+			handler = registrations[len(registrations)-1].handler
+		}
 		state.mu.RUnlock()
 		if handler == nil {
 			return nil, fmt.Errorf("bus.send: no command handler for %q", command.Name)
@@ -135,52 +146,7 @@ func LibraryWithBus(eventBus *transportbus.Bus[any]) action.Library {
 		Build()
 
 	listen := action.New("bus.listen", func(ctx context.Context, workload any) (any, error) {
-		actions, ok := flowutil.ResolveActions(ctx, workload)
-		if !ok {
-			return nil, errors.New("bus.listen: no explicit workload and no usable action resolver in context")
-		}
-
-		mounted := 0
-		for _, act := range actions {
-			if act == nil {
-				continue
-			}
-			ex, executable := act.(action.Executable)
-			if !executable {
-				continue
-			}
-			for _, binding := range act.GetBindings() {
-				switch route := binding.(type) {
-				case SubjectBinding:
-					if route.Subject == "" {
-						return nil, errors.New("bus.listen: subject binding must not be empty")
-					}
-					state.events.Subscribe(route.Subject, func(handlerCtx context.Context, payload any) error {
-						_, err := ex.ExecuteDecoded(handlerCtx, flowutil.Decode(payload))
-						return err
-					})
-					mounted++
-				case CommandBinding:
-					if route.Name == "" {
-						return nil, errors.New("bus.listen: command binding name must not be empty")
-					}
-					state.mu.Lock()
-					state.handlers[route.Name] = ex
-					state.mu.Unlock()
-					mounted++
-				}
-			}
-		}
-		if mounted == 0 {
-			return nil, errors.New("bus.listen: auto-discovery found 0 subject- or command-bound actions")
-		}
-
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		contracts.SignalReady(ctx)
-		<-ctx.Done()
-		return nil, ctx.Err()
+		return runListener(ctx, workload, state)
 	}).
 		Description("Register subject subscribers and command handlers until the context is canceled").
 		Tag("transport", "bus").
@@ -189,5 +155,84 @@ func LibraryWithBus(eventBus *transportbus.Bus[any]) action.Library {
 	return action.Library{
 		Name:    "transport.bus",
 		Actions: []action.AnyAction{listen, publish, send},
+	}
+}
+
+func runListener(ctx context.Context, workload any, state *flowBus) (any, error) {
+	actions, ok := flowutil.ResolveActions(ctx, workload)
+	if !ok {
+		return nil, errors.New("bus.listen: no explicit workload and no usable action resolver in context")
+	}
+
+	session := &listenerSession{}
+	var unsubscribers []func()
+	defer func() { state.removeListener(session, unsubscribers) }()
+
+	mounted := 0
+	for _, act := range actions {
+		if act == nil {
+			continue
+		}
+		ex, executable := act.(action.Executable)
+		if !executable {
+			continue
+		}
+		for _, binding := range act.GetBindings() {
+			switch route := binding.(type) {
+			case SubjectBinding:
+				if route.Subject == "" {
+					return nil, errors.New("bus.listen: subject binding must not be empty")
+				}
+				unsubscribe := state.events.SubscribeWithCancel(route.Subject, func(handlerCtx context.Context, payload any) error {
+					_, err := ex.ExecuteDecoded(handlerCtx, flowutil.Decode(payload))
+					return err
+				})
+				unsubscribers = append(unsubscribers, unsubscribe)
+				mounted++
+			case CommandBinding:
+				if route.Name == "" {
+					return nil, errors.New("bus.listen: command binding name must not be empty")
+				}
+				state.mu.Lock()
+				state.handlers[route.Name] = append(state.handlers[route.Name], commandRegistration{
+					session: session,
+					handler: ex,
+				})
+				state.mu.Unlock()
+				mounted++
+			}
+		}
+	}
+	if mounted == 0 {
+		return nil, errors.New("bus.listen: auto-discovery found 0 subject- or command-bound actions")
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	contracts.SignalReady(ctx)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (state *flowBus) removeListener(session *listenerSession, unsubscribers []func()) {
+	for _, unsubscribe := range unsubscribers {
+		unsubscribe()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for name, registrations := range state.handlers {
+		remaining := make([]commandRegistration, 0, len(registrations))
+		for _, registration := range registrations {
+			if registration.session != session {
+				remaining = append(remaining, registration)
+			}
+		}
+		if len(remaining) == 0 {
+			delete(state.handlers, name)
+		} else {
+			state.handlers[name] = remaining
+		}
 	}
 }

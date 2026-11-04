@@ -24,9 +24,16 @@ type Handler[T any] func(ctx context.Context, msg T) error
 // Middleware wraps a Handler for cross-cutting concerns.
 type Middleware[T any] func(Handler[T]) Handler[T]
 
+// subscription is one handler registration. active lets a publish snapshot
+// skip a registration that was removed after the snapshot was loaded.
+type subscription[T any] struct {
+	handler Handler[T]
+	active  atomic.Bool
+}
+
 // handlerSet is an immutable snapshot of handlers for one subject.
 type handlerSet[T any] struct {
-	handlers []Handler[T]
+	handlers []*subscription[T]
 }
 
 // Bus is a generic pub/sub message bus. Safe for concurrent use.
@@ -47,9 +54,16 @@ func New[T any](mws ...Middleware[T]) *Bus[T] {
 // Subscribe registers a handler. Middleware is applied at subscribe time —
 // zero alloc on Publish.
 func (b *Bus[T]) Subscribe(subject string, h Handler[T]) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.SubscribeWithCancel(subject, h)
+}
 
+// SubscribeWithCancel registers a handler and returns a function that removes it.
+func (b *Bus[T]) SubscribeWithCancel(subject string, h Handler[T]) func() {
+	if h == nil {
+		return func() {}
+	}
+
+	b.mu.Lock()
 	p := b.handlers[subject]
 	if p == nil {
 		p = &atomic.Pointer[handlerSet[T]]{}
@@ -61,14 +75,46 @@ func (b *Bus[T]) Subscribe(subject string, h Handler[T]) {
 		wrapped = v(wrapped)
 	}
 
-	var old []Handler[T]
+	var old []*subscription[T]
 	if set := p.Load(); set != nil {
 		old = set.handlers
 	}
 
+	registered := &subscription[T]{handler: wrapped}
+	registered.active.Store(true)
 	handlers := slices.Clone(old)
-	handlers = append(handlers, wrapped)
+	handlers = append(handlers, registered)
 	p.Store(&handlerSet[T]{handlers: handlers})
+	b.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			registered.active.Store(false)
+			b.mu.Lock()
+			defer b.mu.Unlock()
+
+			if b.handlers[subject] != p {
+				return
+			}
+			set := p.Load()
+			if set == nil {
+				return
+			}
+			remaining := make([]*subscription[T], 0, len(set.handlers)-1)
+			for _, sub := range set.handlers {
+				if sub != registered {
+					remaining = append(remaining, sub)
+				}
+			}
+			if len(remaining) == 0 {
+				p.Store(nil)
+				delete(b.handlers, subject)
+				return
+			}
+			p.Store(&handlerSet[T]{handlers: remaining})
+		})
+	}
 }
 
 // Publish delivers msg to all handlers for subject.
@@ -88,9 +134,11 @@ func (b *Bus[T]) Publish(ctx context.Context, subject string, msg T) error {
 	}
 
 	var firstErr error
-	for _, h := range set.handlers {
-		if err := h(ctx, msg); err != nil && firstErr == nil {
-			firstErr = err
+	for _, sub := range set.handlers {
+		if sub.active.Load() {
+			if err := sub.handler(ctx, msg); err != nil && firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
 	return firstErr

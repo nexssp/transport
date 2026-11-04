@@ -42,7 +42,7 @@ Adapters implement a shared lifecycle: `CanHandle` recognizes their binding type
 
 ## Install
 
-Requires **Go 1.26.9 or newer**.
+Requires **Go 1.27.3 or newer**.
 
 ```
 go get github.com/nexssp/transport@latest

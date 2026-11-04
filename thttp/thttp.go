@@ -353,7 +353,8 @@ func (t *Transport) sseHandler(channel string, broadcaster StreamBroadcaster) ht
 				if !ok {
 					return
 				}
-				_, _ = w.Write([]byte("event: message\ndata: " + string(payload) + "\n\n")) //nolint:errcheck // response write failure is terminal
+				message := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(payload))
+				_, _ = w.Write([]byte("event: message\ndata: " + strings.ReplaceAll(message, "\n", "\ndata: ") + "\n\n")) //nolint:errcheck // response write failure is terminal
 				flusher.Flush()
 			}
 		}

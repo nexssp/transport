@@ -18,7 +18,7 @@ require (
 	github.com/go-playground/validator/v10 v10.30.5 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/nexssp/validation v0.3.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.58.1-0.20261009181718-2f1f834330b2 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.16.0 // indirect
