@@ -3,10 +3,13 @@ package nexssflow
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nexssp/flow/compiler"
+	flowinclude "github.com/nexssp/flow/extensions/include"
 	"github.com/nexssp/flow/extensions/pipeline"
 	"github.com/nexssp/flow/extensions/runtime"
 	flowschema "github.com/nexssp/flow/extensions/schema"
@@ -104,6 +107,10 @@ type schemaRunResult struct {
 }
 
 func runSchemaFlow(t *testing.T, source string, args ...string) schemaRunResult {
+	return runSchemaFlowAt(t, source, "schema_cli_test.nflow", args...)
+}
+
+func runSchemaFlowAt(t *testing.T, source, name string, args ...string) schemaRunResult {
 	t.Helper()
 
 	var captured schemaCLIRequest
@@ -134,6 +141,7 @@ func runSchemaFlow(t *testing.T, source string, args ...string) schemaRunResult 
 	cfg, cfgErr := runner.BuildConfig([]compiler.Bundle{
 		runtime.Bundle(nil),
 		pipeline.Bundle(nil),
+		flowinclude.Bundle(nil),
 		flowschema.Bundle(nil),
 		bundle,
 		probeBundle,
@@ -145,12 +153,143 @@ func runSchemaFlow(t *testing.T, source string, args ...string) schemaRunResult 
 			err:    cfgErr,
 		}
 	}
-	_, runErr := runner.Execute(context.Background(), cfg, source, "schema_cli_test.nflow", nil)
+	_, runErr := runner.Execute(context.Background(), cfg, source, name, nil)
 	return schemaRunResult{
 		captured: captured,
 		stdout:   stdoutBuf.String(),
 		stderr:   stderrBuf.String(),
 		err:      runErr,
+	}
+}
+
+func preprocessSchemaMetadata(t *testing.T, source, name string) map[string]any {
+	t.Helper()
+
+	directives := compiler.NewDirectiveTable(flowinclude.Directive, pipeline.Directive, flowschema.Directive)
+	_, meta, err := compiler.Preprocess(context.Background(), directives, source, name)
+	if err != nil {
+		t.Fatalf("Preprocess() error = %v", err)
+	}
+	return meta
+}
+
+func TestSchemaCLI_IncludedModulesProvidePipelineAndSchemaMetadata(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "modules"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "schemas"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	schemaSource := `@schema IncludedConfig struct {
+  Targets []string ` + "`json:\"targets\" cli:\"target,targets,t\" usage:\"included source paths\" validate:\"required\"`" + `
+  Tests bool ` + "`json:\"tests\" cli:\"tests\"`" + `
+  MaxLines int ` + "`json:\"max_lines\" cli:\"max-lines,L\"`" + `
+}
+@pipeline pack:cli="pack:Included package command"
+  :request-schema=IncludedConfig
+  probe.capture
+@end
+`
+	if err := os.WriteFile(filepath.Join(dir, "schemas", "config.nflow"), []byte(schemaSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	moduleSource := `@include ../schemas/config.nflow AS command
+`
+	if err := os.WriteFile(filepath.Join(dir, "modules", "pack.nflow"), []byte(moduleSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootSource := `@include ./modules/pack.nflow AS command_module
+tcli.listen
+`
+
+	got := runSchemaFlowAt(t, rootSource, filepath.Join(dir, "root.nflow"), "pack", "--target", "./included", "--tests", "--max-lines", "18")
+	requireSuccess(t, got)
+	requireTargets(t, got.captured.Targets, []string{"./included"})
+	if !got.captured.Tests {
+		t.Errorf("Tests = false, want true")
+	}
+	if got.captured.MaxLines != 18 {
+		t.Errorf("MaxLines = %d, want 18", got.captured.MaxLines)
+	}
+}
+
+func TestRequestSchemasFromMeta_QualifiesRootAndNestedPipelineNames(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "modules"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	leafSource := `@schema NestedConfig struct {
+  Name string ` + "`json:\"name\" cli:\"name\"`" + `
+}
+@pipeline pack:cli="nested-pack"
+  :request-schema=NestedConfig
+  runtime.noop
+@end
+`
+	if err := os.WriteFile(filepath.Join(dir, "modules", "leaf.nflow"), []byte(leafSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	moduleSource := `@include ./leaf.nflow AS nested
+`
+	if err := os.WriteFile(filepath.Join(dir, "modules", "module.nflow"), []byte(moduleSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootSource := `@schema RootConfig struct {
+  Name string ` + "`json:\"name\" cli:\"name\"`" + `
+}
+@pipeline root:cli="root-pack"
+  :request-schema=RootConfig
+  runtime.noop
+@end
+@include ./modules/module.nflow AS included
+`
+
+	meta := preprocessSchemaMetadata(t, rootSource, filepath.Join(dir, "root.nflow"))
+	got, err := requestSchemasFromMeta(meta)
+	if err != nil {
+		t.Fatalf("requestSchemasFromMeta() error = %v", err)
+	}
+	for actionName, schemaName := range map[string]string{
+		"pipeline.root":                 "RootConfig",
+		"included.nested.pipeline.pack": "NestedConfig",
+	} {
+		requestSchema, ok := got[actionName]
+		if !ok || requestSchema.Name != schemaName {
+			t.Errorf("schema for %q = %#v, present = %t; want %q", actionName, requestSchema, ok, schemaName)
+		}
+	}
+}
+
+func TestRequestSchemasFromMeta_RejectsQualifiedPipelineCollisionAcrossModules(t *testing.T) {
+	dir := t.TempDir()
+	moduleSource := `@schema SharedConfig struct {
+  Name string ` + "`json:\"name\" cli:\"name\"`" + `
+}
+@pipeline pack:cli="nested-pack"
+  :request-schema=SharedConfig
+  runtime.noop
+@end
+`
+	if err := os.WriteFile(filepath.Join(dir, "module.nflow"), []byte(moduleSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rootSource := `@schema SharedConfig struct {
+  Name string ` + "`json:\"name\" cli:\"name\"`" + `
+}
+@pipeline included.pipeline.pack:cli="root-pack"
+  :request-schema=SharedConfig
+  runtime.noop
+@end
+@include ./module.nflow AS included
+`
+
+	meta := preprocessSchemaMetadata(t, rootSource, filepath.Join(dir, "root.nflow"))
+	_, err := requestSchemasFromMeta(meta)
+	if err == nil || !strings.Contains(err.Error(), `pipeline action "included.pipeline.pack" already has`) {
+		t.Fatalf("requestSchemasFromMeta() error = %v, want qualified pipeline collision", err)
 	}
 }
 
@@ -419,6 +558,22 @@ func TestSchemaCLI_SchemaWithoutCLITags_Rejected(t *testing.T) {
 func TestSchemaCLI_UnknownSchemaReference_Rejected(t *testing.T) {
 	got := runSchemaFlow(t, schemaUnknownReference, "pack")
 	requireFailure(t, got, "DoesNotExist")
+}
+
+func TestRequestSchemasFromMeta_RejectsDuplicateSchemaReference(t *testing.T) {
+	meta := map[string]any{
+		"schemas": []flowschema.Schema{
+			{Name: "Shared"},
+			{Name: "Shared"},
+		},
+		"pipeline_modifiers": map[string][]string{
+			"pack": {"cli=pack", "request-schema=Shared"},
+		},
+	}
+	_, err := requestSchemasFromMeta(meta)
+	if err == nil || !strings.Contains(err.Error(), "declared more than once") {
+		t.Fatalf("requestSchemasFromMeta() error = %v, want duplicate-schema diagnostic", err)
+	}
 }
 
 func TestSchemaCLI_AliasCollision_Rejected(t *testing.T) {

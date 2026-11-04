@@ -93,6 +93,10 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 }
 
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
+	if err := t.validateCommandBindings(); err != nil {
+		fmt.Fprintf(t.stderr, "Error: %v\n", err)
+		return nil, err
+	}
 	if len(t.args) == 0 {
 		t.PrintHelp()
 		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
@@ -103,7 +107,11 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		return t.handleHelpCommand()
 	}
 
-	targetAction := t.findAction(cmdArg)
+	targetAction, err := t.findAction(cmdArg)
+	if err != nil {
+		fmt.Fprintf(t.stderr, "Error: %v\n", err)
+		return nil, err
+	}
 	if targetAction == nil {
 		fmt.Fprintf(t.stderr, "Error: unknown command %q\n\n", cmdArg)
 		t.PrintHelp()
@@ -119,6 +127,36 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	return t.executeAction(ctx, targetAction)
 }
 
+func (t *Transport) validateCommandBindings() error {
+	type owner struct {
+		name  string
+		index int
+	}
+
+	owners := make(map[string]owner)
+	for index, act := range t.actions {
+		if act == nil || act.Describe() == nil {
+			continue
+		}
+		for _, binding := range act.GetBindings() {
+			cliBind, ok := binding.(CLIBinding)
+			if !ok {
+				continue
+			}
+			for _, cmd := range append([]string{cliBind.Command}, cliBind.Aliases...) {
+				if cmd == "" {
+					continue
+				}
+				if previous, exists := owners[cmd]; exists && previous.index != index {
+					return xerr.Conflict(fmt.Sprintf("tcli: command %q is already bound to %q and also bound to %q", cmd, previous.name, act.Describe().Name))
+				}
+				owners[cmd] = owner{name: act.Describe().Name, index: index}
+			}
+		}
+	}
+	return nil
+}
+
 // handleHelpCommand implements `app help [command]`.
 func (t *Transport) handleHelpCommand() (any, error) {
 	if len(t.args) <= 1 {
@@ -127,7 +165,12 @@ func (t *Transport) handleHelpCommand() (any, error) {
 	}
 
 	target := t.args[1]
-	if act := t.findAction(target); act != nil {
+	act, err := t.findAction(target)
+	if err != nil {
+		fmt.Fprintf(t.stderr, "Error: %v\n", err)
+		return nil, err
+	}
+	if act != nil {
 		t.PrintCommandHelp(act)
 		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
 	}
@@ -208,17 +251,22 @@ func (t *Transport) renderResult(res any) error {
 	return nil
 }
 
-func (t *Transport) findAction(cmd string) action.AnyAction {
+func (t *Transport) findAction(cmd string) (action.AnyAction, error) {
+	var found action.AnyAction
 	for _, act := range t.actions {
 		for _, b := range act.GetBindings() {
 			if cliBind, ok := b.(CLIBinding); ok {
 				if cliBind.Command == cmd || slices.Contains(cliBind.Aliases, cmd) {
-					return act
+					if found != nil && found.Describe().Name != act.Describe().Name {
+						return nil, xerr.Conflict(fmt.Sprintf("tcli: command %q is already bound to %q and also bound to %q", cmd, found.Describe().Name, act.Describe().Name))
+					}
+					found = act
+					break
 				}
 			}
 		}
 	}
-	return nil
+	return found, nil
 }
 
 // WithExecutable overrides the binary name used in CLI help & usage output.

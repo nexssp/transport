@@ -60,12 +60,23 @@ func wrapPipelineRequestSchemas(meta map[string]any, inner action.AnyAction) (ac
 }
 
 func requestSchemasFromMeta(meta map[string]any) (map[string]tcli.CLIRequestSchema, error) {
+	requestSchemas := make(map[string]tcli.CLIRequestSchema)
+	if err := collectRequestSchemasFromMeta(meta, "", requestSchemas); err != nil {
+		return nil, err
+	}
+	return requestSchemas, nil
+}
+
+func collectRequestSchemasFromMeta(meta map[string]any, namespace string, requestSchemas map[string]tcli.CLIRequestSchema) error {
 	schemas := make(map[string]flowschema.Schema)
+	duplicateSchemas := make(map[string]struct{})
 	for _, schema := range flowschema.SchemasFromMap(meta) {
+		if _, exists := schemas[schema.Name]; exists {
+			duplicateSchemas[schema.Name] = struct{}{}
+		}
 		schemas[schema.Name] = schema
 	}
 	pipelineModifiers, _ := meta["pipeline_modifiers"].(map[string][]string)
-	requestSchemas := make(map[string]tcli.CLIRequestSchema)
 	for pipelineName, modifiers := range pipelineModifiers {
 		hasCLI, schemaName := false, ""
 		for _, raw := range modifiers {
@@ -83,29 +94,52 @@ func requestSchemasFromMeta(meta map[string]any) (map[string]tcli.CLIRequestSche
 		if !hasCLI || schemaName == "" {
 			continue
 		}
+		if _, duplicate := duplicateSchemas[schemaName]; duplicate {
+			return fmt.Errorf("tcli: pipeline %q references @schema %q, which is declared more than once in its source module", pipelineName, schemaName)
+		}
 
 		schema, ok := schemas[schemaName]
 		if !ok {
-			return nil, fmt.Errorf("tcli: pipeline %q references undeclared @schema %q", pipelineName, schemaName)
+			return fmt.Errorf("tcli: pipeline %q references undeclared @schema %q", pipelineName, schemaName)
 		}
 		requestSchema, err := CLIRequestSchemaFromFlowSchema(schema)
 		if err != nil {
-			return nil, fmt.Errorf("tcli: pipeline %q: %w", pipelineName, err)
+			return fmt.Errorf("tcli: pipeline %q: %w", pipelineName, err)
 		}
-		canonicalName := pipelineName
-		if !strings.Contains(canonicalName, ".") {
-			canonicalName = "pipeline." + canonicalName
+		canonicalName := qualifiedPipelineActionName(namespace, pipelineName)
+		if _, exists := requestSchemas[canonicalName]; exists {
+			return fmt.Errorf("tcli: pipeline action %q already has a request-schema binding", canonicalName)
 		}
 		requestSchemas[canonicalName] = requestSchema
 	}
-	return requestSchemas, nil
+	for _, imported := range compiler.SourceImports(meta) {
+		childNamespace := imported.Namespace
+		if namespace != "" {
+			childNamespace = namespace + "." + childNamespace
+		}
+		if err := collectRequestSchemasFromMeta(imported.Source.Metadata(), childNamespace, requestSchemas); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func qualifiedPipelineActionName(namespace, name string) string {
+	if !strings.Contains(name, ".") {
+		name = "pipeline." + name
+	}
+	if namespace != "" {
+		return namespace + "." + name
+	}
+	return name
 }
 
 // CLIRequestSchemaFromFlowSchema converts a Flow @schema declaration
 // into the tcli request schema consumed by ParseCLIRequest.
 func CLIRequestSchemaFromFlowSchema(schema flowschema.Schema) (tcli.CLIRequestSchema, error) {
 	requestSchema := tcli.CLIRequestSchema{Name: schema.Name}
-	for _, field := range schema.Fields {
+	for i := range schema.Fields {
+		field := &schema.Fields[i]
 		cliTag := strings.TrimSpace(field.Tags["cli"])
 		if cliTag == "" {
 			continue

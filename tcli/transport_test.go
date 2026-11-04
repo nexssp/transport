@@ -114,6 +114,54 @@ func TestTransport_ActionExecutionFailure(t *testing.T) {
 	}
 }
 
+func TestTransport_DuplicateCommandBindingsAreRejected(t *testing.T) {
+	first := action.New("module_a.pipeline.pack", func(_ context.Context, _ struct{}) (string, error) {
+		return "first", nil
+	}).Route(tcli.Command("pack", "First package command")).Build()
+	second := action.New("module_b.pipeline.pack", func(_ context.Context, _ struct{}) (string, error) {
+		return "second", nil
+	}).Route(tcli.Command("pack", "Second package command")).Build()
+
+	var stdout, stderr bytes.Buffer
+	cli := tcli.New(tcli.WithArgs("pack"), tcli.WithOutput(&stdout, &stderr))
+	cli.Mount([]action.AnyAction{first, second})
+
+	_, err := cli.Do(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "already bound") {
+		t.Fatalf("Do() error = %v, want duplicate-command conflict", err)
+	}
+	if kind := xerr.KindFrom(err); kind != xerr.KindConflict {
+		t.Fatalf("KindFrom(error) = %v, want %v", kind, xerr.KindConflict)
+	}
+	if !strings.Contains(err.Error(), "module_a.pipeline.pack") || !strings.Contains(err.Error(), "module_b.pipeline.pack") {
+		t.Fatalf("conflict error does not identify both actions: %v", err)
+	}
+}
+
+func TestTransport_DuplicateCommandBindingsAreReportedBeforeHelp(t *testing.T) {
+	first := action.New("same.action", func(_ context.Context, _ struct{}) (string, error) {
+		return "first", nil
+	}).Route(tcli.Command("pack", "First package command")).Build()
+	second := action.New("same.action", func(_ context.Context, _ struct{}) (string, error) {
+		return "second", nil
+	}).Route(tcli.Command("pack", "Second package command")).Build()
+
+	var stdout, stderr bytes.Buffer
+	cli := tcli.New(tcli.WithArgs(), tcli.WithOutput(&stdout, &stderr))
+	cli.Mount([]action.AnyAction{first, second})
+
+	_, err := cli.Do(context.Background(), nil)
+	if err == nil || xerr.KindFrom(err) != xerr.KindConflict {
+		t.Fatalf("Do() error = %v, want duplicate-command conflict", err)
+	}
+	if !strings.Contains(stderr.String(), "command \"pack\" is already bound") {
+		t.Fatalf("stderr = %q, want explicit duplicate-command diagnostic", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "Available Commands:") {
+		t.Fatalf("duplicate commands should fail before help is rendered: %q", stderr.String())
+	}
+}
+
 func TestTransport_NilSafetyAndEmptyArgs(t *testing.T) {
 	t.Parallel()
 
