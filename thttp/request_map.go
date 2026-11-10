@@ -49,10 +49,15 @@ func BindMapFromHTTPRequest(target any, r *http.Request) error {
 		setString(name, r.URL.Query().Get(name))
 	}
 
-	// net/http records the selected ServeMux pattern on a routed request. Use
-	// its wildcard names rather than trying to re-match or decode the URL path.
-	if fields := strings.Fields(r.Pattern); len(fields) >= 2 {
-		for segment := range strings.SplitSeq(fields[1], "/") {
+	// net/http records the selected ServeMux pattern on a routed request. The
+	// transport registers a path-only dispatcher pattern, while callers may
+	// still use method-qualified patterns on a directly managed ServeMux.
+	patternPath := r.Pattern
+	if fields := strings.Fields(patternPath); len(fields) >= 2 {
+		patternPath = fields[1]
+	}
+	if patternPath != "" {
+		for segment := range strings.SplitSeq(patternPath, "/") {
 			if !strings.HasPrefix(segment, "{") || !strings.HasSuffix(segment, "}") {
 				continue
 			}

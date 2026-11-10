@@ -39,6 +39,8 @@ func MapToHTTPStatus(k xerr.Kind) int {
 	switch k { //nolint:exhaustive // Internal and Shutdown intentionally share the default 500 response
 	case xerr.KindBadRequest, xerr.KindValidation:
 		return http.StatusBadRequest
+	case xerr.KindUnsupportedMediaType:
+		return http.StatusUnsupportedMediaType
 	case xerr.KindUnauthorized:
 		return http.StatusUnauthorized
 	case xerr.KindForbidden:

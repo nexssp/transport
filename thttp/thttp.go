@@ -1,22 +1,17 @@
 package thttp
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nexssp/flow/compiler/contracts"
 	"github.com/nexssp/kernel/action"
-	"github.com/nexssp/kernel/xctx"
-	"github.com/nexssp/kernel/xerr"
 
 	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/codec"
@@ -24,17 +19,12 @@ import (
 
 var _ transport.Transport = (*Transport)(nil)
 
-var payloadPool = sync.Pool{
-	New: func() any {
-		return bytes.NewBuffer(make([]byte, 0, 4096))
-	},
-}
-
 type Option func(*Transport)
 
 type Transport struct {
 	addr              string
 	mux               *http.ServeMux
+	routes            map[string]*pathDispatcher
 	server            *http.Server
 	mdws              []func(http.Handler) http.Handler
 	broadcaster       StreamBroadcaster
@@ -58,6 +48,7 @@ func New(addr string, opts ...Option) *Transport {
 	t := &Transport{
 		addr:              addr,
 		mux:               http.NewServeMux(),
+		routes:            make(map[string]*pathDispatcher),
 		broadcaster:       NewBroadcaster(16),
 		idemStore:         action.NewMemoryIdempotencyStore(0),
 		codec:             codec.Default,
@@ -116,7 +107,7 @@ func WithIdempotencyResponseLimit(limit int) Option {
 
 func (t *Transport) CanHandle(b action.Binding) bool {
 	switch b.(type) {
-	case HTTPRoute, SSERoute, RawHTTPHandler:
+	case HTTPRoute, RawHTTPRoute, SSERoute, RawHTTPHandler:
 		return true
 	default:
 		return false
@@ -146,22 +137,21 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 		for _, b := range act.GetBindings() {
 			switch r := b.(type) {
 			case HTTPRoute:
-				pattern := formatPattern(r.Method, r.Path)
-				h := t.httpHandler(ex, meta)
+				h := t.httpHandler(ex, meta, modeTyped)
 				if meta != nil && meta.Idempotency.Enabled && t.idemStore != nil {
 					h = withIdempotency(t.idemStore, meta.Idempotency, h, t.maxIdemRespBytes)
 				}
-				t.mux.HandleFunc(pattern, h)
+				t.registerRoute(r.Path, r.Method, h)
+			case RawHTTPRoute:
+				t.registerRoute(r.Path, r.Method, t.httpHandler(ex, meta, modeRaw))
 			case SSERoute:
-				pattern := formatPattern(http.MethodGet, r.Path)
 				broadcaster := r.Broadcaster
 				if broadcaster == nil {
 					broadcaster = t.broadcaster
 				}
-				t.mux.HandleFunc(pattern, t.sseHandler(r.Channel, broadcaster))
+				t.registerRoute(r.Path, http.MethodGet, t.sseHandler(r.Channel, broadcaster))
 			case RawHTTPHandler:
-				pattern := formatPattern(r.Method, r.Path)
-				t.mux.HandleFunc(pattern, r.Handler)
+				t.registerRoute(r.Path, r.Method, r.Handler)
 			}
 		}
 	}
@@ -228,95 +218,6 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	}
 	<-serveDone
 	return nil, ctx.Err()
-}
-
-//nolint:gocyclo // HTTP handler; branches reflect request lifecycle (auth, decode, error, success) — no shared abstractions without churn
-func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-
-		reqID := xctx.RequestIDFrom(ctx)
-		if reqID == "" {
-			reqID = r.Header.Get(transport.HeaderRequestID)
-		}
-		if reqID != "" {
-			w.Header().Set(transport.HeaderRequestID, reqID)
-		}
-		if execID := r.Header.Get(transport.HeaderExecutionID); execID != "" {
-			ctx = action.WithExecutionID(ctx, execID)
-			w.Header().Set(transport.HeaderExecutionID, execID)
-		}
-		traceID, spanID := r.Header.Get(transport.HeaderTraceID), r.Header.Get(transport.HeaderSpanID)
-		if traceID != "" || spanID != "" {
-			ctx = action.WithTraceContext(ctx, traceID, spanID)
-		}
-
-		res, err := ex.ExecuteDecoded(ctx, func(v any) error {
-			// Automatic struct tag binding (path, query, header, cookie, form)
-			if err := BindFromTags(v, r); err != nil {
-				return err
-			}
-			if err := BindMapFromHTTPRequest(v, r); err != nil {
-				return err
-			}
-			// NFlow pipeline decoders still receive path/query data in their map
-			// input, then decode a JSON body so explicitly supplied body fields
-			// retain their established precedence.
-			if d, ok := v.(HTTPDecoder); ok {
-				return d.FromHTTPRequest(r)
-			}
-
-			// Skip body decoding for methods without request payload
-			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Body == nil || r.Body == http.NoBody {
-				return nil
-			}
-
-			// Acquire buffer ONLY when reading actual body payload
-			buf, ok := payloadPool.Get().(*bytes.Buffer)
-			if !ok || buf == nil {
-				buf = bytes.NewBuffer(make([]byte, 0, 4096))
-			}
-			buf.Reset()
-			defer func() {
-				if buf.Cap() <= 64*1024 {
-					payloadPool.Put(buf)
-				}
-			}()
-
-			n, readErr := buf.ReadFrom(io.LimitReader(r.Body, t.maxBodyBytes+1))
-			if readErr != nil && !errors.Is(readErr, io.EOF) {
-				return xerr.BadRequest("failed reading request body", readErr)
-			}
-			if n > t.maxBodyBytes {
-				return xerr.BadRequest(fmt.Sprintf("request body exceeds limit of %d bytes", t.maxBodyBytes))
-			}
-			if buf.Len() == 0 {
-				return nil
-			}
-
-			if unmarshalErr := t.codec.Unmarshal(buf.Bytes(), v); unmarshalErr != nil {
-				return xerr.BadRequest(fmt.Sprintf("invalid %s payload: %v", t.codec.Name(), unmarshalErr))
-			}
-			return nil
-		})
-
-		w.Header().Set("Content-Type", t.codec.ContentType())
-
-		if err != nil {
-			appErr := xerr.From(err)
-			w.WriteHeader(transport.MapToHTTPStatus(appErr.Kind))
-			_ = t.codec.NewEncoder(w).Encode(appErr.Public(reqID)) //nolint:errcheck // response write failure is terminal
-			return
-		}
-
-		status := http.StatusOK
-		if meta != nil && meta.SuccessStatus != 0 {
-			status = meta.SuccessStatus
-		}
-
-		w.WriteHeader(status)
-		_ = t.codec.NewEncoder(w).Encode(res) //nolint:errcheck // response write failure is terminal
-	}
 }
 
 func (t *Transport) sseHandler(channel string, broadcaster StreamBroadcaster) http.HandlerFunc {

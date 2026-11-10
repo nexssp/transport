@@ -96,6 +96,24 @@ func getBindingTag(field reflect.StructField) (tag, source string) {
 }
 
 func makeExtractor(ft reflect.Type, tag, source string) (func(*http.Request) (reflect.Value, error), error) {
+	formFileType := reflect.TypeFor[FormFile]()
+	formFilePointerType := reflect.TypeFor[*FormFile]()
+	if source == "form" && (ft == formFileType || ft == formFilePointerType) {
+		return func(r *http.Request) (reflect.Value, error) {
+			if r.MultipartForm == nil || len(r.MultipartForm.File[tag]) == 0 {
+				return reflect.Value{}, nil
+			}
+			var file FormFile
+			if err := file.ReadField(r, tag, defaultMaxRequestBodyBytes); err != nil {
+				return reflect.Value{}, err
+			}
+			if ft == formFilePointerType {
+				return reflect.ValueOf(&file), nil
+			}
+			return reflect.ValueOf(file), nil
+		}, nil
+	}
+
 	switch source {
 	case "path":
 		return func(r *http.Request) (reflect.Value, error) {

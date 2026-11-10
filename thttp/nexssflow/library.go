@@ -36,6 +36,7 @@ type RuntimeConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ActionFilter      func(action.AnyAction) bool
+	Middlewares       []func(http.Handler) http.Handler
 }
 
 var runtimeConfigKey = xctx.NewKey[RuntimeConfig]("transport.thttp.runtime_config")
@@ -80,6 +81,18 @@ func Bundle(opts map[string]string) compiler.Bundle {
 					path = "/"
 				}
 				return b.Route(thttp.HTTPRoute{Method: method, Path: path})
+			}),
+			compiler.String("raw_route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
+				method := http.MethodPost
+				path := raw
+				if sp := strings.IndexByte(raw, ' '); sp > 0 {
+					method = strings.ToUpper(strings.TrimSpace(raw[:sp]))
+					path = strings.TrimSpace(raw[sp+1:])
+				}
+				if path == "" {
+					path = "/"
+				}
+				return b.Route(thttp.RawRoute(method, path))
 			}),
 		},
 	}
@@ -242,6 +255,11 @@ func listenTriggerAction(cfg Config) action.AnyAction {
 		if runtime.IdleTimeout > 0 {
 			idleTimeout = runtime.IdleTimeout
 		}
+		for _, middleware := range runtime.Middlewares {
+			if middleware == nil {
+				return nil, errors.New("thttp.listen: host middleware must not be nil")
+			}
+		}
 
 		server := thttp.New(addr,
 			thttp.WithReadHeaderTimeout(readHeaderTimeout),
@@ -252,6 +270,7 @@ func listenTriggerAction(cfg Config) action.AnyAction {
 		if cfg.SecurityHeaders {
 			server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
 		}
+		server.Use(runtime.Middlewares...)
 
 		toMount := make([]action.AnyAction, 0, len(resolved.actions))
 		for _, act := range resolved.actions {
