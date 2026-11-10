@@ -11,7 +11,17 @@ var decoderType = reflect.TypeFor[HTTPDecoder]()
 
 func validateBindings(actions []action.AnyAction) {
 	for _, act := range actions {
+		if act == nil {
+			continue
+		}
+		meta := act.Describe()
 		for _, b := range act.GetBindings() {
+			if _, ok := b.(RawHTTPRoute); ok {
+				if meta != nil && meta.Idempotency.Enabled {
+					panic(fmt.Sprintf("thttp: action %q cannot combine :idempotent with :raw_route; raw HTTP responses are not cached", meta.Name))
+				}
+				continue
+			}
 			if _, ok := b.(HTTPRoute); !ok {
 				continue
 			}
@@ -23,7 +33,11 @@ func validateBindings(actions []action.AnyAction) {
 			if reqVal == nil {
 				continue
 			}
-			checkDecoder(act.Describe().Name, reqVal)
+			actionName := ""
+			if meta != nil {
+				actionName = meta.Name
+			}
+			checkDecoder(actionName, reqVal)
 		}
 	}
 }
