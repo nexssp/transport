@@ -183,8 +183,12 @@ func applyFlags(elem reflect.Value, flagsMap map[int][]string) error {
 
 		fieldVal := elem.Field(fieldIdx)
 
-		if fieldVal.Kind() == reflect.Slice && fieldVal.Type().Elem().Kind() == reflect.String {
-			fieldVal.Set(reflect.ValueOf(accumulateStrings(valList)))
+		if fieldVal.Kind() == reflect.Slice {
+			if fieldVal.Type().Elem().Kind() == reflect.String {
+				fieldVal.Set(reflect.ValueOf(accumulateStrings(valList)))
+			} else if err := setSliceValues(fieldVal, valList); err != nil {
+				return fmt.Errorf("flag -%s: %w", elem.Type().Field(fieldIdx).Name, err)
+			}
 			continue
 		}
 
@@ -205,6 +209,40 @@ func accumulateStrings(valList []string) []string {
 		}
 	}
 	return items
+}
+
+func setSliceValues(field reflect.Value, values []string) error {
+	elemType := field.Type().Elem()
+	if !isSupportedCLIValueType(elemType) {
+		return fmt.Errorf("unsupported slice element type %s", elemType)
+	}
+
+	parsed := reflect.MakeSlice(field.Type(), 0, len(values))
+	for _, raw := range values {
+		value := reflect.New(elemType).Elem()
+		if err := setFieldValue(value, raw); err != nil {
+			return err
+		}
+		parsed = reflect.Append(parsed, value)
+	}
+	field.Set(parsed)
+	return nil
+}
+
+func isSupportedCLIValueType(typ reflect.Type) bool {
+	if typ == reflect.TypeFor[time.Time]() {
+		return true
+	}
+
+	switch typ.Kind() { //nolint:exhaustive // only supported scalar CLI types are valid slice elements
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
 }
 
 func applyPositionals(elem reflect.Value, typ reflect.Type, positionals []string) {

@@ -117,6 +117,44 @@ func TestBinder_AllDataTypes(t *testing.T) {
 	}
 }
 
+func TestBinder_RepeatedNonStringSliceFlags(t *testing.T) {
+	t.Parallel()
+
+	type Request struct {
+		Counts []int       `cli:"count"`
+		Dates  []time.Time `cli:"date"`
+	}
+
+	var captured Request
+	act := action.New("test.repeatednonstringslices", func(_ context.Context, req Request) (string, error) {
+		captured = req
+		return "ok", nil
+	}).Route(tcli.Command("slice-test", "Repeated non-string slices")).Build()
+
+	firstDate := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
+	secondDate := time.Date(2026, 9, 4, 15, 30, 0, 0, time.UTC)
+	var stdout, stderr bytes.Buffer
+	cli := tcli.New(
+		tcli.WithArgs(
+			"slice-test",
+			"--count", "2", "--count", "5",
+			"--date", firstDate.Format(time.DateOnly), "--date="+secondDate.Format(time.RFC3339),
+		),
+		tcli.WithOutput(&stdout, &stderr),
+	)
+	cli.Mount([]action.AnyAction{act})
+	if _, err := cli.Do(context.Background(), nil); err != nil {
+		t.Fatalf("unexpected Do() error: %v", err)
+	}
+
+	if len(captured.Counts) != 2 || captured.Counts[0] != 2 || captured.Counts[1] != 5 {
+		t.Errorf("Counts = %v, want [2 5]", captured.Counts)
+	}
+	if len(captured.Dates) != 2 || !captured.Dates[0].Equal(firstDate) || !captured.Dates[1].Equal(secondDate) {
+		t.Errorf("Dates = %v, want [%v %v]", captured.Dates, firstDate, secondDate)
+	}
+}
+
 func TestBinder_PositionalStringFallback(t *testing.T) {
 	t.Parallel()
 
