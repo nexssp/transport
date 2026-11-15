@@ -113,9 +113,17 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		return nil, err
 	}
 	if targetAction == nil {
-		fmt.Fprintf(t.stderr, "Error: unknown command %q\n\n", cmdArg)
-		t.PrintHelp()
-		return nil, xerr.NotFound(fmt.Sprintf("command %q not found", cmdArg))
+		targetAction = t.defaultAction()
+		if targetAction == nil {
+			fmt.Fprintf(t.stderr, "Error: unknown command %q\n\n", cmdArg)
+			t.PrintHelp()
+			return nil, xerr.NotFound(fmt.Sprintf("command %q not found", cmdArg))
+		}
+		if hasHelpFlag(t.args) {
+			t.PrintCommandHelp(targetAction)
+			return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
+		}
+		return t.executeAction(ctx, targetAction, t.args)
 	}
 
 	// Intercept sub-command help (e.g. `srcpack pack --help`, `srcpack arch -h`)
@@ -124,7 +132,7 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		return nil, nil //nolint:nilnil // one-shot CLI: help shown, no structured result to return
 	}
 
-	return t.executeAction(ctx, targetAction)
+	return t.executeAction(ctx, targetAction, t.args[1:])
 }
 
 func (t *Transport) validateCommandBindings() error {
@@ -134,6 +142,7 @@ func (t *Transport) validateCommandBindings() error {
 	}
 
 	owners := make(map[string]owner)
+	var defaultOwner *owner
 	for index, act := range t.actions {
 		if act == nil || act.Describe() == nil {
 			continue
@@ -141,6 +150,16 @@ func (t *Transport) validateCommandBindings() error {
 		for _, binding := range act.GetBindings() {
 			cliBind, ok := binding.(CLIBinding)
 			if !ok {
+				continue
+			}
+			if cliBind.Default {
+				if cliBind.Command != "" || len(cliBind.Aliases) != 0 {
+					return xerr.BadRequest("tcli: default CLI binding cannot also declare a command or aliases")
+				}
+				if defaultOwner != nil && defaultOwner.index != index {
+					return xerr.Conflict(fmt.Sprintf("tcli: default route is already bound to %q and also bound to %q", defaultOwner.name, act.Describe().Name))
+				}
+				defaultOwner = &owner{name: act.Describe().Name, index: index}
 				continue
 			}
 			for _, cmd := range append([]string{cliBind.Command}, cliBind.Aliases...) {
@@ -190,7 +209,7 @@ func hasHelpFlag(args []string) bool {
 }
 
 // executeAction resolves, decodes, and runs the target action, then renders its result.
-func (t *Transport) executeAction(ctx context.Context, targetAction action.AnyAction) (any, error) {
+func (t *Transport) executeAction(ctx context.Context, targetAction action.AnyAction, args []string) (any, error) {
 	ex, ok := targetAction.(action.Executable)
 	if !ok {
 		return nil, xerr.Internal("action is not executable")
@@ -199,9 +218,9 @@ func (t *Transport) executeAction(ctx context.Context, targetAction action.AnyAc
 	requestSchema, hasRequestSchema := requestSchemaFromAction(targetAction)
 	decoder := func(target any) error {
 		if hasRequestSchema {
-			return bindCLIRequestTarget(target, t.args[1:], requestSchema)
+			return bindCLIRequestTarget(target, args, requestSchema)
 		}
-		return bindCLITarget(target, t.args[1:])
+		return bindCLITarget(target, args)
 	}
 
 	res, err := ex.ExecuteDecoded(ctx, decoder)
@@ -267,6 +286,20 @@ func (t *Transport) findAction(cmd string) (action.AnyAction, error) {
 		}
 	}
 	return found, nil
+}
+
+func (t *Transport) defaultAction() action.AnyAction {
+	for _, act := range t.actions {
+		if act == nil {
+			continue
+		}
+		for _, binding := range act.GetBindings() {
+			if cliBind, ok := binding.(CLIBinding); ok && cliBind.Default {
+				return act
+			}
+		}
+	}
+	return nil
 }
 
 // WithExecutable overrides the binary name used in CLI help & usage output.

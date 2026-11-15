@@ -6,15 +6,24 @@ type CLIBinding struct {
 	Aliases     []string
 	Description string
 	Examples    []string
+	Default     bool
 }
 
 func (b CLIBinding) String() string {
+	if b.Default {
+		return "cli: <root>"
+	}
 	return "cli: " + b.Command
 }
 
 // Command constructs a new CLI route binding.
 func Command(cmd, desc string) CLIBinding {
 	return CLIBinding{Command: cmd, Description: desc}
+}
+
+// RootCommand binds an action to CLI arguments when no named command matches.
+func RootCommand(desc string) CLIBinding {
+	return CLIBinding{Default: true, Description: desc}
 }
 
 // WithAliases attaches alternative invocation aliases.

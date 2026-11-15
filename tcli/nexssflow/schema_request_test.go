@@ -28,6 +28,12 @@ type schemaCLIRequest struct {
 	Targets  []string `json:"targets"`
 	Tests    bool     `json:"tests"`
 	MaxLines int      `json:"max_lines"`
+	View1    bool     `json:"view1"`
+	T1       bool     `json:"t1"`
+	T2       bool     `json:"t2"`
+	T3       bool     `json:"t3"`
+	File     string   `json:"file"`
+	Repos    []string `json:"repos"`
 }
 
 const pipelineWithSchemaCLI = `
@@ -89,6 +95,24 @@ const schemaWithPositional = `
 
 @pipeline collect:cli="collect:Collect files"
   :request-schema=WithPositional
+  probe.capture
+@end
+
+tcli.listen
+`
+
+const pipelineWithRootSchemaCLI = `
+@schema RepoPeekConfig struct {
+  View1 bool ` + "`json:\"view1\" cli:\"view1\" usage:\"show repository metadata\"`" + `
+  T1 bool ` + "`json:\"t1\" cli:\"t1\" usage:\"plain rows\"`" + `
+  T2 bool ` + "`json:\"t2\" cli:\"t2\" usage:\"subtle zebra rows\"`" + `
+  T3 bool ` + "`json:\"t3\" cli:\"t3\" usage:\"strong zebra rows\"`" + `
+  File string ` + "`json:\"file\" cli:\"f,file\" usage:\"read repositories from a list file\"`" + `
+  Repos []string ` + "`json:\"repos\" cli:\",positional\" usage:\"repositories to inspect\"`" + `
+}
+
+@pipeline inspect:cli-root="Inspect GitHub repositories"
+  :request-schema=RepoPeekConfig
   probe.capture
 @end
 
@@ -544,6 +568,53 @@ func TestSchemaCLI_DoubleDashTerminatorPassesRestToPositional(t *testing.T) {
 		"file.go",
 	)
 	requireSuccess(t, got)
+}
+
+func TestSchemaCLI_RootRoutePreservesFlagFirstAndPositionals(t *testing.T) {
+	got := runSchemaFlow(t, pipelineWithRootSchemaCLI,
+		"--view1", "-f", "repos.txt", "github.com/nexssp/repo", "owner/other",
+	)
+	requireSuccess(t, got)
+	if !got.captured.View1 || got.captured.File != "repos.txt" {
+		t.Fatalf("captured root request = %+v, want view1 and file", got.captured)
+	}
+	wantRepos := []string{"github.com/nexssp/repo", "owner/other"}
+	if len(got.captured.Repos) != len(wantRepos) || got.captured.Repos[0] != wantRepos[0] || got.captured.Repos[1] != wantRepos[1] {
+		t.Fatalf("captured repos = %#v, want %#v", got.captured.Repos, wantRepos)
+	}
+}
+
+func TestSchemaCLI_RootRouteAcceptsSingleDashTemplateFlags(t *testing.T) {
+	tests := []struct {
+		flag string
+		want string
+	}{
+		{flag: "-t1", want: "t1"},
+		{flag: "-t2", want: "t2"},
+		{flag: "-t3", want: "t3"},
+	}
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			got := runSchemaFlow(t, pipelineWithRootSchemaCLI, test.flag)
+			requireSuccess(t, got)
+			if got.captured.T1 != (test.want == "t1") || got.captured.T2 != (test.want == "t2") || got.captured.T3 != (test.want == "t3") {
+				t.Fatalf("captured template flags = t1:%t t2:%t t3:%t, want only %s", got.captured.T1, got.captured.T2, got.captured.T3, test.want)
+			}
+		})
+	}
+}
+
+func TestSchemaCLI_RootRouteNoArgsShowsHelp(t *testing.T) {
+	got := runSchemaFlow(t, pipelineWithRootSchemaCLI)
+	requireSuccess(t, got)
+	for _, want := range []string{"Command: srcpack", "Usage:", "srcpack [flags] [repos...]", "--view1", "-f", "--file"} {
+		if !strings.Contains(got.stderr, want) {
+			t.Errorf("root help does not contain %q\nstderr:\n%s", want, got.stderr)
+		}
+	}
+	if strings.TrimSpace(got.stdout) != "" {
+		t.Errorf("root help unexpectedly ran the action: stdout=%q", got.stdout)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -10,6 +10,10 @@ import (
 )
 
 func (t *Transport) PrintHelp() {
+	if root := t.defaultAction(); root != nil {
+		t.PrintCommandHelp(root)
+		return
+	}
 	fmt.Fprintln(t.stderr, "Available Commands:")
 	for _, act := range t.actions {
 		meta := act.Describe()
@@ -45,7 +49,11 @@ func (t *Transport) PrintCommandHelp(act action.AnyAction) {
 		desc = meta.Description
 	}
 
-	fmt.Fprintf(t.stderr, "Command: %s\n", binding.Command)
+	commandName := binding.Command
+	if binding.Default {
+		commandName = t.executable
+	}
+	fmt.Fprintf(t.stderr, "Command: %s\n", commandName)
 	if desc != "" {
 		fmt.Fprintf(t.stderr, "%s\n", desc)
 	}
@@ -65,13 +73,11 @@ func (t *Transport) PrintCommandHelp(act action.AnyAction) {
 		positionalText = t.positionalUsage(payload)
 	}
 
-	fmt.Fprintf(
-		t.stderr,
-		"\nUsage:\n  %s %s [flags]%s\n",
-		t.executable,
-		binding.Command,
-		positionalText,
-	)
+	usage := t.executable
+	if !binding.Default {
+		usage += " " + binding.Command
+	}
+	fmt.Fprintf(t.stderr, "\nUsage:\n  %s [flags]%s\n", usage, positionalText)
 
 	if len(binding.Examples) > 0 {
 		fmt.Fprintf(t.stderr, "\nExamples:\n")

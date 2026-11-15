@@ -34,3 +34,15 @@ func TestCLIBinding_CreationAndMethods(t *testing.T) {
 		t.Fatal("expected CanHandle(string) to return false for non-CLIBinding")
 	}
 }
+
+func TestCLIBinding_RootCommand(t *testing.T) {
+	t.Parallel()
+
+	binding := tcli.RootCommand("Inspect repositories")
+	if !binding.Default || binding.Command != "" || binding.Description != "Inspect repositories" {
+		t.Fatalf("unexpected root binding: %+v", binding)
+	}
+	if binding.String() != "cli: <root>" {
+		t.Fatalf("String() = %q, want %q", binding.String(), "cli: <root>")
+	}
+}

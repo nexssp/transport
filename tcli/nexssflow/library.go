@@ -31,6 +31,9 @@ func Bundle(opts map[string]string) compiler.Bundle {
 		ID:        "tcli",
 		Libraries: []action.Library{Library(cfg)},
 		Modifiers: []compiler.Modifier{
+			compiler.String("cli-root", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
+				return b.Route(tcli.RootCommand(strings.TrimSpace(raw)))
+			}),
 			compiler.String("cli", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
 				cmd, desc, _ := strings.Cut(raw, ":")
 				return b.Route(tcli.Command(strings.TrimSpace(cmd), strings.TrimSpace(desc)))
@@ -85,7 +88,7 @@ func collectRequestSchemasFromMeta(meta map[string]any, namespace string, reques
 				continue
 			}
 			switch strings.TrimSpace(key) {
-			case "cli":
+			case "cli", "cli-root":
 				hasCLI = true
 			case "request-schema":
 				schemaName = strings.TrimSpace(value)
@@ -193,13 +196,15 @@ func Library(cfg Config) action.Library {
 	return LibraryWithTransport(tcli.New(opts...))
 }
 
-// RoutingOnlyBundle returns a bundle that registers :cli= as a no-op
-// modifier.
+// RoutingOnlyBundle returns a bundle that registers CLI routing modifiers as no-op modifiers.
 func RoutingOnlyBundle() compiler.Bundle {
 	return compiler.Bundle{
 		ID:        "tcli.routing",
 		Libraries: []action.Library{{Name: "tcli.routing"}},
 		Modifiers: []compiler.Modifier{
+			compiler.String("cli-root", func(b *action.Builder[any, any], _ string) *action.Builder[any, any] {
+				return b
+			}),
 			compiler.String("cli", func(b *action.Builder[any, any], _ string) *action.Builder[any, any] {
 				return b
 			}),
@@ -289,7 +294,8 @@ func listenTriggerAction(tr *tcli.Transport) action.AnyAction {
 		}
 
 		tr.Mount(actionsToMount)
-		return tr.Do(ctx, nil)
+		_, err = tr.Do(ctx, nil)
+		return nil, err
 	}).
 		Tag("transport", "tcli").
 		Build()
