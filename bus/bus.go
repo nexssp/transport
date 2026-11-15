@@ -118,7 +118,8 @@ func (b *Bus[T]) SubscribeWithCancel(subject string, h Handler[T]) func() {
 }
 
 // Publish delivers msg to all handlers for subject.
-// Returns first error; all handlers still run.
+// It returns the first error and continues delivery even if ctx is canceled.
+// Handlers are responsible for honoring ctx themselves.
 func (b *Bus[T]) Publish(ctx context.Context, subject string, msg T) error {
 	b.mu.RLock()
 	p := b.handlers[subject]

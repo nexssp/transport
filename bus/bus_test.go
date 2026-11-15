@@ -45,6 +45,35 @@ func TestBus_PubSub(t *testing.T) {
 	}
 }
 
+func TestBusPublishContinuesAfterContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	b := bus.New[string]()
+	calls := 0
+	secondSawCanceled := false
+	b.Subscribe("events.cancel", func(context.Context, string) error {
+		calls++
+		cancel()
+		return nil
+	})
+	b.Subscribe("events.cancel", func(ctx context.Context, _ string) error {
+		calls++
+		secondSawCanceled = ctx.Err() == context.Canceled
+		return nil
+	})
+
+	if err := b.Publish(ctx, "events.cancel", "notice"); err != nil {
+		t.Fatalf("publish with canceled context: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("handler calls = %d, want 2", calls)
+	}
+	if !secondSawCanceled {
+		t.Fatal("second handler did not receive the canceled context")
+	}
+}
+
 // ── 2. Typed Bus (Commands) Tests ────────────────────────────────────────────
 
 type CreateOrderCmd struct {
