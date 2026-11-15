@@ -73,7 +73,9 @@ func (d *payloadDecoder) Decode(v any) error {
 
 // Transport bridges the internal Nexss Bus to the Action execution engine.
 type Transport struct {
-	eventBus *bus.Bus[any]
+	eventBus      *bus.Bus[any]
+	mu            sync.Mutex
+	unsubscribers []func()
 }
 
 // New creates a new internal bus transport.
@@ -85,6 +87,9 @@ func New(eventBus *bus.Bus[any]) *Transport {
 
 // Mount scans actions for tbus.Topic bindings and subscribes them to the internal bus.
 func (t *Transport) Mount(actions []action.AnyAction) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
 	for _, act := range actions {
 		ex, ok := act.(action.Executable)
 		if !ok {
@@ -93,7 +98,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 
 		for _, b := range act.GetBindings() {
 			if tb, ok := b.(TopicBinding); ok {
-				t.eventBus.Subscribe(tb.Topic, func(ctx context.Context, payload any) error {
+				unsubscribe := t.eventBus.SubscribeWithCancel(tb.Topic, func(ctx context.Context, payload any) error {
 					d := decoderPool.Get().(*payloadDecoder) //nolint:forcetypeassert // decoderPool.New always returns *payloadDecoder
 					d.payload = payload
 
@@ -103,6 +108,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 					decoderPool.Put(d)
 					return err
 				})
+				t.unsubscribers = append(t.unsubscribers, unsubscribe)
 			}
 		}
 	}
@@ -112,11 +118,26 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 // then returns ctx.Err() so callers can distinguish clean shutdown from
 // a crash.
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
+	defer t.unsubscribe()
+
 	if ctx.Err() == nil {
 		contracts.SignalReady(ctx)
 	}
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func (t *Transport) unsubscribe() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.unsubscribeLocked()
+}
+
+func (t *Transport) unsubscribeLocked() {
+	for _, unsubscribe := range t.unsubscribers {
+		unsubscribe()
+	}
+	t.unsubscribers = nil
 }
 
 // Publish is a convenience wrapper to emit events to the internal bus.
