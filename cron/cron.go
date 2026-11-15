@@ -38,7 +38,7 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	// A scheduler belongs to one Do invocation. Reusing a stopped scheduler
 	// would retain jobs whose closures capture the previous run's context.
-	scheduler := robfig.New()
+	scheduler := robfig.New(robfig.WithChain(robfig.Recover(robfig.DefaultLogger)))
 
 	// Derive a cancellable context for all cron jobs.
 	jobCtx, cancel := context.WithCancel(ctx)

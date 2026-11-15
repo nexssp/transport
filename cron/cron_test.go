@@ -107,3 +107,57 @@ func TestCronTransport_MountAccumulatesActions(t *testing.T) {
 		}
 	}
 }
+
+func TestCronTransport_RecoversPanickingExecutable(t *testing.T) {
+	t.Parallel()
+
+	var panicCalls atomic.Int32
+	base := action.New("cron.panic", func(_ context.Context, _ struct{}) (string, error) {
+		return "unused", nil
+	}).Route(cron.Every(time.Second)).Build()
+	panicking := panickingExecutable{AnyAction: base, calls: &panicCalls}
+
+	ran := make(chan struct{}, 1)
+	healthy := action.New("cron.healthy", func(_ context.Context, _ struct{}) (string, error) {
+		ran <- struct{}{}
+		return "ok", nil
+	}).Route(cron.Every(time.Second)).Build()
+
+	tr := cron.New()
+	tr.Mount([]action.AnyAction{panicking, healthy})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := tr.Do(ctx, nil)
+		done <- err
+	}()
+
+	select {
+	case <-ran:
+	case <-time.After(3 * time.Second):
+		t.Fatal("healthy cron job did not run after panicking job")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Do error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("cron scheduler did not stop after cancellation")
+	}
+	if calls := panicCalls.Load(); calls == 0 {
+		t.Fatal("panicking executable was not called")
+	}
+}
+
+type panickingExecutable struct {
+	action.AnyAction
+	calls *atomic.Int32
+}
+
+func (p panickingExecutable) ExecuteDecoded(context.Context, action.DecodeFunc) (any, error) {
+	p.calls.Add(1)
+	panic("test panic")
+}
