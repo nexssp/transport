@@ -16,7 +16,7 @@ func TestServerRequestBodyLimitRejectsLargeBodyBeforeRawHandler(t *testing.T) {
 	server.Mux().Handle("POST /raw", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
 	}))
-	request := httptest.NewRequest(http.MethodPost, "/raw", strings.NewReader("12345"))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/raw", strings.NewReader("12345"))
 	response := httptest.NewRecorder()
 
 	server.Handler().ServeHTTP(response, request)
@@ -36,7 +36,7 @@ func TestServerRequestBodyLimitReports413ForChunkedTypedRequest(t *testing.T) {
 	}).Route(POST("/typed")).Build()
 	server.Mount([]action.AnyAction{act})
 
-	request := httptest.NewRequest(http.MethodPost, "/typed", strings.NewReader(`{"x":1}`))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/typed", strings.NewReader(`{"x":1}`))
 	request.ContentLength = -1
 	response := httptest.NewRecorder()
 	server.Handler().ServeHTTP(response, request)

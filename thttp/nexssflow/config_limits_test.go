@@ -1,6 +1,7 @@
 package nexssflow
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,7 +22,7 @@ func TestListenerIngressLimitHelpers(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	tooLarge := httptest.NewRequest(http.MethodPost, "/limits", strings.NewReader("12345"))
+	tooLarge := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/limits", strings.NewReader("12345"))
 	tooLarge.RemoteAddr = "192.0.2.10:1000"
 	tooLargeResponse := httptest.NewRecorder()
 	server.Handler().ServeHTTP(tooLargeResponse, tooLarge)
@@ -29,8 +30,8 @@ func TestListenerIngressLimitHelpers(t *testing.T) {
 		t.Fatalf("oversized body status = %d, want 413", tooLargeResponse.Code)
 	}
 
-	for i := 0; i < 2; i++ {
-		request := httptest.NewRequest(http.MethodPost, "/limits", strings.NewReader("{}"))
+	for i := range 2 {
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/limits", strings.NewReader("{}"))
 		request.RemoteAddr = "192.0.2.10:1000"
 		response := httptest.NewRecorder()
 		server.Handler().ServeHTTP(response, request)

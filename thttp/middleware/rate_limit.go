@@ -21,6 +21,8 @@ const (
 	maxRateLimitEvictions   = 16
 )
 
+var errInvalidRateLimitEntry = errors.New("rate limiter: invalid internal entry")
+
 // RateLimitConfig controls a process-local HTTP request limiter. Requests are
 // keyed by the connected peer address unless KeyFunc is supplied. Forwarded-IP
 // headers are deliberately not trusted; behind a proxy, provide a KeyFunc based
@@ -151,15 +153,23 @@ func (l *keyedRateLimiter) Allow(ctx context.Context, key string) (bool, error) 
 		if element == nil {
 			break
 		}
-		entry := element.Value.(*rateLimitEntry)
+		entry, ok := element.Value.(*rateLimitEntry)
+		if !ok {
+			return false, errInvalidRateLimitEntry
+		}
 		if now.Sub(entry.lastSeen) <= l.ttl {
 			break
 		}
-		l.remove(element)
+		if err := l.remove(element); err != nil {
+			return false, err
+		}
 	}
 
 	if element := l.entries[key]; element != nil {
-		entry := element.Value.(*rateLimitEntry)
+		entry, ok := element.Value.(*rateLimitEntry)
+		if !ok {
+			return false, errInvalidRateLimitEntry
+		}
 		if now.Sub(entry.lastSeen) > l.ttl {
 			entry.limiter = rate.NewLimiter(l.requestsPerSecond, l.burst)
 		}
@@ -170,7 +180,9 @@ func (l *keyedRateLimiter) Allow(ctx context.Context, key string) (bool, error) 
 
 	if l.order.Len() >= l.maxKeys {
 		if oldest := l.order.Back(); oldest != nil {
-			l.remove(oldest)
+			if err := l.remove(oldest); err != nil {
+				return false, err
+			}
 		}
 	}
 	entry := &rateLimitEntry{
@@ -183,10 +195,14 @@ func (l *keyedRateLimiter) Allow(ctx context.Context, key string) (bool, error) 
 	return entry.limiter.Allow(), nil
 }
 
-func (l *keyedRateLimiter) remove(element *list.Element) {
-	entry := element.Value.(*rateLimitEntry)
+func (l *keyedRateLimiter) remove(element *list.Element) error {
+	entry, ok := element.Value.(*rateLimitEntry)
+	if !ok {
+		return errInvalidRateLimitEntry
+	}
 	delete(l.entries, entry.key)
 	l.order.Remove(element)
+	return nil
 }
 
 var _ action.RateLimiter = (*keyedRateLimiter)(nil)

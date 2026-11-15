@@ -108,7 +108,7 @@ func (failingRateLimiter) Allow(context.Context, string) (bool, error) {
 }
 
 func rateLimitRequest(handler http.Handler, remoteAddr string) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", http.NoBody)
 	request.RemoteAddr = remoteAddr
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)

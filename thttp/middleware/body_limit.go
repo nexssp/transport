@@ -32,5 +32,7 @@ func RequestBodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 func writeBodyTooLarge(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusRequestEntityTooLarge)
-	_, _ = io.WriteString(w, `{"error":"request body too large"}`+"\n")
+	if _, err := io.WriteString(w, `{"error":"request body too large"}`+"\n"); err != nil {
+		return
+	}
 }

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -15,7 +16,7 @@ func TestRequestBodyLimitRejectsOversizedDeclaredBody(t *testing.T) {
 	handler := mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		called = true
 	}))
-	request := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("12345"))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/upload", strings.NewReader("12345"))
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -32,8 +33,7 @@ func TestRequestBodyLimitCapsUnknownLengthBody(t *testing.T) {
 	mw := RequestBodyLimit(4)
 	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -44,7 +44,7 @@ func TestRequestBodyLimitCapsUnknownLengthBody(t *testing.T) {
 			t.Errorf("body = %q, want %q", body, "1234")
 		}
 	}))
-	request := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("12345"))
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/upload", strings.NewReader("12345"))
 	request.ContentLength = -1
 	response := httptest.NewRecorder()
 
@@ -62,7 +62,7 @@ func TestRequestBodyLimitLeavesNonPositiveLimitUnchanged(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("large")))
+	handler.ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/upload", strings.NewReader("large")))
 
 	if !called || response.Code != http.StatusNoContent {
 		t.Fatalf("called = %v, status = %d", called, response.Code)

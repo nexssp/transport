@@ -31,7 +31,9 @@ func (t *Transport) String() string {
 	return "cron"
 }
 
-func (t *Transport) Mount(actions []action.AnyAction) { t.actions = actions }
+func (t *Transport) Mount(actions []action.AnyAction) {
+	t.actions = append(t.actions, actions...)
+}
 
 func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 	// A scheduler belongs to one Do invocation. Reusing a stopped scheduler

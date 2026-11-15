@@ -68,12 +68,67 @@ func runtimeConfigFromContext(ctx context.Context) RuntimeConfig {
 
 func configuredRateLimit(requestsPerSecond float64, burst int) (func(http.Handler) http.Handler, error) {
 	if requestsPerSecond <= 0 {
-		return nil, nil
+		return func(next http.Handler) http.Handler { return next }, nil
 	}
 	return httpmiddleware.NewRateLimit(httpmiddleware.RateLimitConfig{
 		RequestsPerSecond: requestsPerSecond,
 		Burst:             burst,
 	})
+}
+
+func newListenerServer(cfg Config, runtime RuntimeConfig, addr string) (*thttp.Transport, error) {
+	readHeaderTimeout := cfg.ReadHeaderTimeout
+	if runtime.ReadHeaderTimeout > 0 {
+		readHeaderTimeout = runtime.ReadHeaderTimeout
+	}
+	readTimeout := cfg.ReadTimeout
+	if runtime.ReadTimeout > 0 {
+		readTimeout = runtime.ReadTimeout
+	}
+	writeTimeout := cfg.WriteTimeout
+	if runtime.WriteTimeout > 0 {
+		writeTimeout = runtime.WriteTimeout
+	}
+	idleTimeout := cfg.IdleTimeout
+	if runtime.IdleTimeout > 0 {
+		idleTimeout = runtime.IdleTimeout
+	}
+	maxBodyBytes := cfg.MaxBodyBytes
+	if runtime.MaxBodyBytes > 0 {
+		maxBodyBytes = runtime.MaxBodyBytes
+	}
+	rateLimitRPS := cfg.RateLimitRPS
+	rateLimitBurst := cfg.RateLimitBurst
+	if runtime.RateLimitRPS != 0 {
+		rateLimitRPS = runtime.RateLimitRPS
+		rateLimitBurst = runtime.RateLimitBurst
+	}
+	for _, middleware := range runtime.Middlewares {
+		if middleware == nil {
+			return nil, errors.New("thttp.listen: host middleware must not be nil")
+		}
+	}
+
+	options := []thttp.Option{
+		thttp.WithReadHeaderTimeout(readHeaderTimeout),
+		thttp.WithReadTimeout(readTimeout),
+		thttp.WithWriteTimeout(writeTimeout),
+		thttp.WithIdleTimeout(idleTimeout),
+	}
+	if maxBodyBytes > 0 {
+		options = append(options, thttp.WithMaxRequestBodyBytes(maxBodyBytes))
+	}
+	server := thttp.New(addr, options...)
+	if cfg.SecurityHeaders {
+		server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
+	}
+	rateLimit, err := configuredRateLimit(rateLimitRPS, rateLimitBurst)
+	if err != nil {
+		return nil, fmt.Errorf("thttp.listen: configure request rate limit: %w", err)
+	}
+	server.Use(rateLimit)
+	server.Use(runtime.Middlewares...)
+	return server, nil
 }
 
 func init() {
@@ -258,59 +313,10 @@ func listenTriggerAction(cfg Config) action.AnyAction {
 		if addr == "" {
 			addr = resolved.addr
 		}
-		readHeaderTimeout := cfg.ReadHeaderTimeout
-		if runtime.ReadHeaderTimeout > 0 {
-			readHeaderTimeout = runtime.ReadHeaderTimeout
-		}
-		readTimeout := cfg.ReadTimeout
-		if runtime.ReadTimeout > 0 {
-			readTimeout = runtime.ReadTimeout
-		}
-		writeTimeout := cfg.WriteTimeout
-		if runtime.WriteTimeout > 0 {
-			writeTimeout = runtime.WriteTimeout
-		}
-		idleTimeout := cfg.IdleTimeout
-		if runtime.IdleTimeout > 0 {
-			idleTimeout = runtime.IdleTimeout
-		}
-		maxBodyBytes := cfg.MaxBodyBytes
-		if runtime.MaxBodyBytes > 0 {
-			maxBodyBytes = runtime.MaxBodyBytes
-		}
-		rateLimitRPS := cfg.RateLimitRPS
-		rateLimitBurst := cfg.RateLimitBurst
-		if runtime.RateLimitRPS != 0 {
-			rateLimitRPS = runtime.RateLimitRPS
-			rateLimitBurst = runtime.RateLimitBurst
-		}
-		for _, middleware := range runtime.Middlewares {
-			if middleware == nil {
-				return nil, errors.New("thttp.listen: host middleware must not be nil")
-			}
-		}
-
-		options := []thttp.Option{
-			thttp.WithReadHeaderTimeout(readHeaderTimeout),
-			thttp.WithReadTimeout(readTimeout),
-			thttp.WithWriteTimeout(writeTimeout),
-			thttp.WithIdleTimeout(idleTimeout),
-		}
-		if maxBodyBytes > 0 {
-			options = append(options, thttp.WithMaxRequestBodyBytes(maxBodyBytes))
-		}
-		server := thttp.New(addr, options...)
-		if cfg.SecurityHeaders {
-			server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
-		}
-		rateLimit, err := configuredRateLimit(rateLimitRPS, rateLimitBurst)
+		server, err := newListenerServer(cfg, runtime, addr)
 		if err != nil {
-			return nil, fmt.Errorf("thttp.listen: configure request rate limit: %w", err)
+			return nil, err
 		}
-		if rateLimit != nil {
-			server.Use(rateLimit)
-		}
-		server.Use(runtime.Middlewares...)
 
 		toMount := make([]action.AnyAction, 0, len(resolved.actions))
 		for _, act := range resolved.actions {

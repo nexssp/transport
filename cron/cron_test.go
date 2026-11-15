@@ -62,3 +62,48 @@ func TestCronTransport_ScheduleExecution(t *testing.T) {
 		t.Fatalf("expected cron job to run at least 1 time, ran %d times", count)
 	}
 }
+
+func TestCronTransport_MountAccumulatesActions(t *testing.T) {
+	t.Parallel()
+
+	calls := make(chan string, 2)
+	first := action.New("cron.first", func(_ context.Context, _ struct{}) (string, error) {
+		calls <- "first"
+		return "ok", nil
+	}).Route(cron.Every(time.Second)).Build()
+	second := action.New("cron.second", func(_ context.Context, _ struct{}) (string, error) {
+		calls <- "second"
+		return "ok", nil
+	}).Route(cron.Every(time.Second)).Build()
+
+	tr := cron.New()
+	tr.Mount([]action.AnyAction{first})
+	tr.Mount([]action.AnyAction{second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_, _ = tr.Do(ctx, nil)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("cron scheduler did not stop after cancellation")
+		}
+	})
+
+	seen := make(map[string]bool, 2)
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	for len(seen) < 2 {
+		select {
+		case name := <-calls:
+			seen[name] = true
+		case <-timer.C:
+			t.Fatalf("both mounted jobs should run within 3s, saw %v", seen)
+		}
+	}
+}
