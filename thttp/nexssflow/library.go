@@ -25,16 +25,25 @@ type Config struct {
 	WriteTimeout      time.Duration `nflow:"write_timeout" default:"30s"`
 	IdleTimeout       time.Duration `nflow:"idle_timeout" default:"120s"`
 	SecurityHeaders   bool          `nflow:"security_headers" default:"false"`
+	MaxBodyBytes      int64         `nflow:"max_body_bytes"`
+	RateLimitRPS      float64       `nflow:"rate_limit_rps"`
+	RateLimitBurst    int           `nflow:"rate_limit_burst"`
 }
 
 // RuntimeConfig overrides bundle-level server settings for one listener
 // invocation. It is useful when the host chooses its bind address at runtime.
+// Positive MaxBodyBytes and RateLimitRPS values override the bundle settings;
+// a negative RateLimitRPS disables a bundle-level rate limit, while zero leaves
+// it unchanged.
 type RuntimeConfig struct {
 	Addr              string
 	ReadHeaderTimeout time.Duration
 	ReadTimeout       time.Duration
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
+	MaxBodyBytes      int64
+	RateLimitRPS      float64
+	RateLimitBurst    int
 	ActionFilter      func(action.AnyAction) bool
 	Middlewares       []func(http.Handler) http.Handler
 }
@@ -55,6 +64,16 @@ func runtimeConfigFromContext(ctx context.Context) RuntimeConfig {
 	}
 	cfg, _ := runtimeConfigKey.From(ctx)
 	return cfg
+}
+
+func configuredRateLimit(requestsPerSecond float64, burst int) (func(http.Handler) http.Handler, error) {
+	if requestsPerSecond <= 0 {
+		return nil, nil
+	}
+	return httpmiddleware.NewRateLimit(httpmiddleware.RateLimitConfig{
+		RequestsPerSecond: requestsPerSecond,
+		Burst:             burst,
+	})
 }
 
 func init() {
@@ -255,20 +274,41 @@ func listenTriggerAction(cfg Config) action.AnyAction {
 		if runtime.IdleTimeout > 0 {
 			idleTimeout = runtime.IdleTimeout
 		}
+		maxBodyBytes := cfg.MaxBodyBytes
+		if runtime.MaxBodyBytes > 0 {
+			maxBodyBytes = runtime.MaxBodyBytes
+		}
+		rateLimitRPS := cfg.RateLimitRPS
+		rateLimitBurst := cfg.RateLimitBurst
+		if runtime.RateLimitRPS != 0 {
+			rateLimitRPS = runtime.RateLimitRPS
+			rateLimitBurst = runtime.RateLimitBurst
+		}
 		for _, middleware := range runtime.Middlewares {
 			if middleware == nil {
 				return nil, errors.New("thttp.listen: host middleware must not be nil")
 			}
 		}
 
-		server := thttp.New(addr,
+		options := []thttp.Option{
 			thttp.WithReadHeaderTimeout(readHeaderTimeout),
 			thttp.WithReadTimeout(readTimeout),
 			thttp.WithWriteTimeout(writeTimeout),
 			thttp.WithIdleTimeout(idleTimeout),
-		)
+		}
+		if maxBodyBytes > 0 {
+			options = append(options, thttp.WithMaxRequestBodyBytes(maxBodyBytes))
+		}
+		server := thttp.New(addr, options...)
 		if cfg.SecurityHeaders {
 			server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
+		}
+		rateLimit, err := configuredRateLimit(rateLimitRPS, rateLimitBurst)
+		if err != nil {
+			return nil, fmt.Errorf("thttp.listen: configure request rate limit: %w", err)
+		}
+		if rateLimit != nil {
+			server.Use(rateLimit)
 		}
 		server.Use(runtime.Middlewares...)
 

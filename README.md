@@ -137,7 +137,7 @@ For example, invoke the built application as `app hello --name Julia`. Use `tcli
 
 | Package | Purpose |
 | --- | --- |
-| [`thttp`](thttp/) | HTTP routes and raw handlers; automatic `path`, `query`, `header`, `cookie`, and `form` binding; middleware; configurable codecs and request limits; categorized error-to-status mapping; Server-Sent Events (SSE); and O(1)-memory NDJSON streaming. |
+| [`thttp`](thttp/) | HTTP routes and raw handlers; automatic `path`, `query`, `header`, `cookie`, and `form` binding; middleware; configurable codecs, body limits, and request rate limits; categorized error-to-status mapping; Server-Sent Events (SSE); and O(1)-memory NDJSON streaming. |
 | [`tcli`](tcli/) | CLI command routing, aliases, flags, positional arguments, request schemas, generated help, and encoded results. |
 | [`tbus`](tbus/) | Connects action bindings to a concurrent, in-process publish/subscribe bus. |
 | [`tmsg`](tmsg/) and [`message`](message/) | Route protocol-neutral message envelopes through an in-process router, preserving request, execution, and trace identity. |
@@ -154,12 +154,16 @@ HTTP request fields can be populated from route parameters, the URL query, heade
 
 When NFlow `security_headers` is enabled, it uses the shared `thttp/middleware.SecurityHeaders` policy and separately marks `/api/` responses `Cache-Control: no-store`. The shared security middleware intentionally does not set CSP; applications serving HTML should provide their own policy.
 
+The THTTP server defaults to a 10 MiB request-body limit. `thttp.WithMaxRequestBodyBytes` changes it for a server, and `thttp/middleware.RequestBodyLimit` can be installed directly for a custom handler stack. The server cap is applied through `Handler` and `Do` before middleware and routes, including raw handlers; serving `Mux()` directly bypasses THTTP middleware, so wrap that handler explicitly. Typed routes report HTTP 413 for an overflow. Raw handlers must check body-read errors to return 413 for unknown-length/chunked overflow. The similarly named `thttp.WithMaxBodyBytes` option configures the separate standalone action adapter, not a server.
+
+`thttp/middleware.NewRateLimit` adds an optional, bounded per-client token-bucket limiter. It keys by the connected client address by default and deliberately does not trust forwarded-IP headers; a trusted proxy or verified-identity key must be configured explicitly. The in-memory limiter is process-local, not a distributed quota. For a shared backend, pass a Kernel `action.RateLimiter`. This is HTTP ingress protection; Flow resilience modifiers such as `:rate_limit` protect action/pipeline execution instead. Neither mechanism replaces edge-level DDoS or connection protection.
+
 ### Nexss Flow 🌀 integration
 
 Bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/nexssflow`, `cron/nexssflow`, `bus/nexssflow`, `bus/mediator/nexssflow`, and `bus/taskqueue/nexssflow` expose transport listeners, messaging actions, and bindings to Nexss Flow programs. Each flow uses `@require` to load its bundle and, for listeners, a binding modifier on a pipeline:
 
 ```
-@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080" }
+@require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080", max_body_bytes: 1048576, rate_limit_rps: 30, rate_limit_burst: 60 }
 @pipeline hello:route="GET /hello"
   runtime.const @{ value: "Hello, Maks" }
 @end

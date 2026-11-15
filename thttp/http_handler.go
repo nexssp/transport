@@ -179,6 +179,10 @@ func writeActionError(writer http.ResponseWriter, request *http.Request, respons
 	}
 	appErr := xerr.From(err)
 	status := transport.MapToHTTPStatus(appErr.Kind)
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		status = http.StatusRequestEntityTooLarge
+	}
 	if statusOverride != 0 {
 		status = statusOverride
 	}

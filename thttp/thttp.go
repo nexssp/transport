@@ -15,6 +15,7 @@ import (
 
 	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/codec"
+	httpmiddleware "github.com/nexssp/transport/thttp/middleware"
 )
 
 var _ transport.Transport = (*Transport)(nil)
@@ -97,6 +98,18 @@ func WithReadHeaderTimeout(d time.Duration) Option {
 }
 func WithIdleTimeout(d time.Duration) Option { return func(t *Transport) { t.idleTimeout = d } }
 
+// WithMaxRequestBodyBytes sets the server-wide request body limit when requests
+// are served through Handler or Do. It applies before custom middleware, typed
+// handlers, raw routes, and raw handlers. Serving Mux directly bypasses it. A
+// non-positive value leaves the existing default unchanged.
+func WithMaxRequestBodyBytes(n int64) Option {
+	return func(t *Transport) {
+		if n > 0 {
+			t.maxBodyBytes = n
+		}
+	}
+}
+
 func WithIdempotencyResponseLimit(limit int) Option {
 	return func(t *Transport) {
 		if limit >= 0 {
@@ -162,6 +175,7 @@ func (t *Transport) Handler() http.Handler {
 	for _, m := range slices.Backward(t.mdws) {
 		h = m(h)
 	}
+	h = httpmiddleware.RequestBodyLimit(t.maxBodyBytes)(h)
 	return RequestIdentity(h)
 }
 
