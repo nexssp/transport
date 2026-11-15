@@ -13,6 +13,8 @@ import (
 var (
 	ErrChannelFull    = errors.New("channel full (backpressure)")
 	ErrAlreadyStarted = errors.New("taskqueue: queue has already been started")
+	// ErrStopped is returned when enqueueing to a stopped queue.
+	ErrStopped = errors.New("taskqueue: queue has already stopped")
 )
 
 // Priority for task lanes.
@@ -62,18 +64,19 @@ type Envelope struct {
 
 // Queue is the in‑process task queue.
 type Queue struct {
-	cfg      Config
-	log      *slog.Logger
-	handlers sync.Map
-	high     chan Envelope
-	normal   chan Envelope
-	low      chan Envelope
-	dlq      chan Envelope
-	startMu  sync.Mutex
-	started  bool
-	done     chan struct{}
-	doneOnce sync.Once
-	wg       sync.WaitGroup
+	cfg         Config
+	log         *slog.Logger
+	handlers    sync.Map
+	high        chan Envelope
+	normal      chan Envelope
+	low         chan Envelope
+	dlq         chan Envelope
+	startMu     sync.Mutex
+	started     bool
+	done        chan struct{}
+	doneOnce    sync.Once
+	lifecycleMu sync.RWMutex
+	wg          sync.WaitGroup
 }
 
 // New creates a ready Queue (no external deps).
@@ -111,6 +114,13 @@ func (q *Queue) EnqueueAt(_ context.Context, taskType string, payload any, p Pri
 		Type:       taskType,
 		Payload:    raw,
 		EnqueuedAt: time.Now().UTC(),
+	}
+	q.lifecycleMu.RLock()
+	defer q.lifecycleMu.RUnlock()
+	select {
+	case <-q.done:
+		return ErrStopped
+	default:
 	}
 	select {
 	case q.channel(p) <- env:
@@ -318,6 +328,8 @@ func (q *Queue) channel(p Priority) chan<- Envelope {
 }
 
 func (q *Queue) closeDone() {
+	q.lifecycleMu.Lock()
+	defer q.lifecycleMu.Unlock()
 	q.doneOnce.Do(func() { close(q.done) })
 }
 

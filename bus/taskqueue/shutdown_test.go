@@ -73,3 +73,37 @@ func TestTaskQueueShutdownDrainsTaskSelectedWithCancellation(t *testing.T) {
 		t.Fatal("queue did not finish shutdown")
 	}
 }
+
+func TestTaskQueueEnqueueAfterShutdownReturnsStopped(t *testing.T) {
+	q, err := taskqueue.New(taskqueue.Config{Name: "enqueue-after-shutdown", Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- q.StartWithReadyCallback(ctx, func() { close(started) })
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("queue did not start")
+	}
+
+	cancel()
+	select {
+	case err := <-startDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("queue shutdown error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queue did not finish shutdown")
+	}
+
+	if err := q.EnqueueAt(context.Background(), "late", nil, taskqueue.High); !errors.Is(err, taskqueue.ErrStopped) {
+		t.Fatalf("enqueue after shutdown error = %v, want ErrStopped", err)
+	}
+}
