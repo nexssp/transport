@@ -4,8 +4,8 @@ go 1.27.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/nexssp/flow v0.78.0
-	github.com/nexssp/kernel v0.38.1
+	github.com/nexssp/flow v0.80.0
+	github.com/nexssp/kernel v0.39.1
 	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/sync v0.25.0
 	golang.org/x/time v0.16.0
