@@ -9,6 +9,7 @@ import (
 	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/compiler/contracts"
 	flowschema "github.com/nexssp/flow/extensions/schema"
+	"github.com/nexssp/flow/runner"
 	"github.com/nexssp/kernel/action"
 
 	"github.com/nexssp/transport/tcli"
@@ -295,7 +296,10 @@ func listenTriggerAction(tr *tcli.Transport) action.AnyAction {
 
 		tr.Mount(actionsToMount)
 		_, err = tr.Do(ctx, nil)
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
+		return runner.SuppressOutput(nil), nil
 	}).
 		Tag("transport", "tcli").
 		Build()

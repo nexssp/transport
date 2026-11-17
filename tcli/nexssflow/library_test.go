@@ -100,6 +100,48 @@ func TestListenPreservesExplicitWorkloadOverride(t *testing.T) {
 	}
 }
 
+func TestListenReturnsSuppressedNilResultOnSuccess(t *testing.T) {
+	tr := tcli.New(tcli.WithArgs())
+	manual := action.New("manual.echo", func(context.Context, struct{}) (string, error) {
+		return "manual-ran", nil
+	}).Route(tcli.Command("manual", "Manual command")).Build()
+	initial := action.Library{Name: "manual", Actions: []action.AnyAction{manual}}
+
+	got, err := action.InvokeAny(context.Background(), listenTriggerAction(tr), initial)
+	if err != nil {
+		t.Fatalf("listenTriggerAction() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("listenTriggerAction() result = nil, want suppression marker")
+	}
+	marker, ok := got.(runner.OutputSuppressed)
+	if !ok {
+		t.Fatalf("listenTriggerAction() result type = %T, want runner.OutputSuppressed", got)
+	}
+	if marker.Value != nil {
+		t.Fatalf("listenTriggerAction() suppressed value = %#v, want nil", marker.Value)
+	}
+}
+
+func TestListenPropagatesTransportFailure(t *testing.T) {
+	tr := tcli.New(tcli.WithArgs("missing"))
+	manual := action.New("manual.echo", func(context.Context, struct{}) (string, error) {
+		return "manual-ran", nil
+	}).Route(tcli.Command("manual", "Manual command")).Build()
+	initial := action.Library{Name: "manual", Actions: []action.AnyAction{manual}}
+
+	got, err := action.InvokeAny(context.Background(), listenTriggerAction(tr), initial)
+	if err == nil {
+		t.Fatal("listenTriggerAction() error = nil, want transport failure")
+	}
+	if got != nil {
+		t.Fatalf("listenTriggerAction() result = %#v, want nil on failure", got)
+	}
+	if !strings.Contains(err.Error(), `command "missing" not found`) {
+		t.Fatalf("listenTriggerAction() error = %v, want missing-command failure", err)
+	}
+}
+
 func TestListenReportsWhenNoCLICommandsAreAvailable(t *testing.T) {
 	_, _, err := executeCLIFlow(t, "tcli.listen", nil)
 	if err == nil {
