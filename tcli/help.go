@@ -12,13 +12,16 @@ import (
 func (t *Transport) PrintHelp() {
 	if root := t.defaultAction(); root != nil {
 		t.PrintCommandHelp(root)
-		return
+		fmt.Fprintln(t.stderr)
 	}
 	fmt.Fprintln(t.stderr, "Available Commands:")
 	for _, act := range t.actions {
 		meta := act.Describe()
 		for _, b := range act.GetBindings() {
 			if cliBind, ok := b.(CLIBinding); ok {
+				if cliBind.Default {
+					continue
+				}
 				desc := cliBind.Description
 				if desc == "" && meta != nil {
 					desc = meta.Description

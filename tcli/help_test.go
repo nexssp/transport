@@ -96,3 +96,37 @@ func TestHelp_RoutingAndFlagDiscovery(t *testing.T) {
 		}
 	})
 }
+
+func TestHelp_DefaultRouteKeepsCommandInventory(t *testing.T) {
+	t.Parallel()
+
+	root := action.New("root.run", func(_ context.Context, _ map[string]any) (string, error) {
+		return "ok", nil
+	}).Route(tcli.RootCommand("Run the default target")).Build()
+	command := action.New("deploy", func(_ context.Context, _ map[string]any) (string, error) {
+		return "ok", nil
+	}).Route(tcli.Command("deploy", "Deploy the application")).Build()
+
+	var stdout, stderr bytes.Buffer
+	cli := tcli.New(
+		tcli.WithExecutable("tool"),
+		tcli.WithOutput(&stdout, &stderr),
+	)
+	cli.Mount([]action.AnyAction{root, command})
+	cli.PrintHelp()
+
+	output := stderr.String()
+	if !strings.Contains(output, "Command: tool") || !strings.Contains(output, "Usage:\n  tool [flags]") {
+		t.Fatalf("root usage missing from help output:\n%s", output)
+	}
+	sections := strings.SplitN(output, "Available Commands:\n", 2)
+	if len(sections) != 2 {
+		t.Fatalf("named command inventory missing from help output:\n%s", output)
+	}
+	if !strings.Contains(sections[1], "deploy") || !strings.Contains(sections[1], "Deploy the application") {
+		t.Fatalf("named command missing from inventory:\n%s", sections[1])
+	}
+	if strings.Contains(sections[1], "Run the default target") {
+		t.Fatalf("default route was duplicated as a command row:\n%s", sections[1])
+	}
+}
