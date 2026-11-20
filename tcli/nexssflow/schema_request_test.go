@@ -250,7 +250,7 @@ func TestRequestSchemasFromMeta_QualifiesRootAndNestedPipelineNames(t *testing.T
 }
 @pipeline pack:cli="nested-pack"
   :request-schema=NestedConfig
-  runtime.noop
+  noop
 @end
 `
 	if err := os.WriteFile(filepath.Join(dir, "modules", "leaf.nflow"), []byte(leafSource), 0o600); err != nil {
@@ -266,7 +266,7 @@ func TestRequestSchemasFromMeta_QualifiesRootAndNestedPipelineNames(t *testing.T
 }
 @pipeline root:cli="root-pack"
   :request-schema=RootConfig
-  runtime.noop
+  noop
 @end
 @include ./modules/module.nflow AS included
 `
@@ -294,7 +294,7 @@ func TestRequestSchemasFromMeta_RejectsQualifiedPipelineCollisionAcrossModules(t
 }
 @pipeline pack:cli="nested-pack"
   :request-schema=SharedConfig
-  runtime.noop
+  noop
 @end
 `
 	if err := os.WriteFile(filepath.Join(dir, "module.nflow"), []byte(moduleSource), 0o600); err != nil {
@@ -305,7 +305,7 @@ func TestRequestSchemasFromMeta_RejectsQualifiedPipelineCollisionAcrossModules(t
 }
 @pipeline included.pipeline.pack:cli="root-pack"
   :request-schema=SharedConfig
-  runtime.noop
+  noop
 @end
 @include ./module.nflow AS included
 `

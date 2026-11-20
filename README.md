@@ -165,7 +165,7 @@ Bundles under `thttp/nexssflow`, `tcli/nexssflow`, `tbus/nexssflow`, `tworker/ne
 ```
 @require github.com/nexssp/transport/thttp/nexssflow { addr: ":8080", max_body_bytes: 1048576, rate_limit_rps: 30, rate_limit_burst: 60 }
 @pipeline hello:route="GET /hello"
-  runtime.const @{ value: "Hello, Maks" }
+  "Hello, Maks"
 @end
 thttp.listen
 ```
@@ -173,7 +173,7 @@ thttp.listen
 ```
 @require github.com/nexssp/transport/tcli/nexssflow
 @pipeline hello:cli="hello:Greet someone"
-  runtime.const @{ value: "Hello, Julia" }
+  "Hello, Julia"
 @end
 tcli.listen
 ```
@@ -181,7 +181,7 @@ tcli.listen
 ```
 @require github.com/nexssp/transport/tbus/nexssflow
 @pipeline orders:topic="orders"
-  runtime.noop
+  noop
 @end
 tbus.listen
 ```
@@ -189,7 +189,7 @@ tbus.listen
 ```
 @require github.com/nexssp/transport/tworker/nexssflow
 @pipeline heartbeat:worker=1m
-  runtime.const @{ value: "tick" }
+  "tick"
 @end
 tworker.listen
 ```
@@ -199,7 +199,7 @@ tworker.listen
 ```
 @require github.com/nexssp/transport/cron/nexssflow
 @pipeline hourly:cron="0 * * * *"
-  runtime.const @{ value: "tick" }
+  "tick"
 @end
 cron.listen
 ```
@@ -209,7 +209,7 @@ The generic bus exposes `bus.publish` (input `{ subject, payload }`), `bus.send`
 ```
 @require github.com/nexssp/transport/bus/nexssflow
 @pipeline orders:subject="orders"
-  runtime.noop
+  noop
 @end
 bus.listen
 ```
@@ -219,7 +219,7 @@ The mediator exposes `mediator.send` (input `{ name, payload }`) and `mediator.p
 ```
 @require github.com/nexssp/transport/bus/mediator/nexssflow
 @pipeline createUser:command="users.create"
-  runtime.noop
+  noop
 @end
 mediator.listen
 ```
@@ -229,7 +229,7 @@ The task queue exposes `taskqueue.enqueue` (input `{ type, payload, priority }`,
 ```
 @require github.com/nexssp/transport/bus/taskqueue/nexssflow
 @pipeline sendEmail:task="email.send"
-  runtime.noop
+  noop
 @end
 taskqueue.listen
 ```

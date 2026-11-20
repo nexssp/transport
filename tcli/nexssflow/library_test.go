@@ -17,7 +17,7 @@ import (
 
 const pipelineCLI = `
 @pipeline pack:cli="pack:Package source context"
-  runtime.const @{ value: "pack-ran" }
+  "pack-ran"
 @end
 
 tcli.listen

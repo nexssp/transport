@@ -14,6 +14,7 @@ import (
 
 	"github.com/nexssp/flow/compiler"
 	"github.com/nexssp/flow/extensions/pipeline"
+	"github.com/nexssp/flow/extensions/projection"
 	"github.com/nexssp/flow/extensions/runtime"
 	"github.com/nexssp/flow/runner"
 	"github.com/nexssp/kernel/action"
@@ -45,12 +46,12 @@ func TestHTTPServer_AutoDiscovery(t *testing.T) {
 	}
 
 	src := `
-	@pipeline health:route="GET /api/health"
-  runtime.const @{ value: { status: "up" } }
+		@pipeline health:route="GET /api/health"
+  { status: "up" }
 @end
 
 @pipeline echo:route="POST /echo"
-  runtime.noop
+  noop
 @end
 
 thttp.listen
@@ -58,6 +59,7 @@ thttp.listen
 	bundles := []compiler.Bundle{
 		runtime.Bundle(nil),
 		pipeline.Bundle(nil),
+		projection.Bundle(nil),
 		rawBundle,
 		nexssflow.Bundle(map[string]string{
 			"addr":             addr,
