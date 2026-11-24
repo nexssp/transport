@@ -122,6 +122,8 @@ func (t *Transport) CanHandle(b action.Binding) bool {
 	switch b.(type) {
 	case HTTPRoute, RawHTTPRoute, SSERoute, RawHTTPHandler:
 		return true
+	case NDJSONRoute:
+		return true
 	default:
 		return false
 	}
@@ -157,6 +159,8 @@ func (t *Transport) Mount(actions []action.AnyAction) {
 				t.registerRoute(r.Path, r.Method, h)
 			case RawHTTPRoute:
 				t.registerRoute(r.Path, r.Method, t.httpHandler(ex, meta, modeRaw))
+			case NDJSONRoute:
+				t.registerRoute(r.Path, r.Method, t.httpHandler(ex, meta, modeStream))
 			case SSERoute:
 				broadcaster := r.Broadcaster
 				if broadcaster == nil {

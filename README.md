@@ -137,7 +137,7 @@ For example, invoke the built application as `app hello --name Julia`. Use `tcli
 
 | Package | Purpose |
 | --- | --- |
-| [`thttp`](thttp/) | HTTP routes and raw handlers; automatic `path`, `query`, `header`, `cookie`, and `form` binding; middleware; configurable codecs, body limits, and request rate limits; categorized error-to-status mapping; Server-Sent Events (SSE); and O(1)-memory NDJSON streaming. |
+| [`thttp`](thttp/) | HTTP routes and raw handlers; automatic `path`, `query`, `header`, `cookie`, and `form` binding; middleware; configurable codecs, body limits, concurrency and rate limits; categorized error-to-status mapping; Server-Sent Events (SSE); per-request NDJSON events; and embedded static files. |
 | [`tcli`](tcli/) | CLI command routing, aliases, flags, positional arguments, request schemas, generated help, and encoded results. |
 | [`tbus`](tbus/) | Connects action bindings to a concurrent, in-process publish/subscribe bus. |
 | [`tmsg`](tmsg/) and [`message`](message/) | Route protocol-neutral message envelopes through an in-process router, preserving request, execution, and trace identity. |
@@ -150,9 +150,28 @@ For example, invoke the built application as `app hello --name Julia`. Use `tcli
 
 ### HTTP request binding
 
-HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Dynamic `map[string]any` requests also receive URL query and path wildcard values, including the `any` request shape used by materialized Flow pipelines; a decoded JSON body takes precedence for duplicate keys. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides reusable security-header middleware, request/execution/trace headers, SSE, and direct NDJSON iterator streaming. The Flow `thttp.listen` action auto-discovers every supported HTTP binding, including `HTTPRoute`, `SSERoute`, and `RawHTTPHandler`.
+HTTP request fields can be populated from route parameters, the URL query, headers, cookies, or form data using struct tags. Dynamic `map[string]any` requests also receive URL query and path wildcard values, including the `any` request shape used by materialized Flow pipelines; a decoded JSON body takes precedence for duplicate keys. Request bodies use the configured codec (JSON by default). The HTTP adapter also provides reusable security-header middleware, request/execution/trace headers, SSE, direct NDJSON iterator streaming, and request-scoped NDJSON event routes. The Flow `thttp.listen` action auto-discovers every supported HTTP binding, including `HTTPRoute`, `NDJSONRoute`, `SSERoute`, and `RawHTTPHandler`.
 
 When NFlow `security_headers` is enabled, it uses the shared `thttp/middleware.SecurityHeaders` policy and separately marks `/api/` responses `Cache-Control: no-store`. The shared security middleware intentionally does not set CSP; applications serving HTML should provide their own policy.
+
+### NFlow static files and request-scoped streams
+
+Use `:raw_route` with `thttp.static` to serve an asset map from a directory embed. Missing extensionless paths can use the SPA index, while missing files with extensions remain 404 responses:
+
+```nflow
+@require github.com/nexssp/flow/extensions/embed { root: "." }
+@embed web "web/dist"
+
+@pipeline web:raw_route="GET /{path...}"
+  thttp.static ( files: embed.web, index: "index.html", spa: true )
+@end
+```
+
+The `thttp.static` action also accepts `base_path`, `cache_control`, and `content_security_policy`. Directory `@embed` values are explicit public assets and are bounded by file count, per-file bytes, and total bytes; do not point them at a repository root or a directory containing secrets.
+
+Use `:stream_route="POST /path"` when an NFlow action should emit events while it runs. The handler attaches a request-scoped `thttp.StreamEventWriter` to the action context; actions can call `thttp.StreamEventWriterFromContext(ctx)` without importing AI packages. Each event is JSON-encoded on one line and flushed. When the action returns, transport appends a `done` event containing its result, or a public `error` event. Event routes are not compatible with idempotency caching.
+
+For a local-only app, set `loopback_only: true` and bind an explicit loopback address such as `127.0.0.1:8766`; requests with non-loopback peers, non-local Host values, or a cross-origin `Origin` are rejected. `max_concurrent_requests: 1` rejects excess work with 503 rather than queueing it, which is useful for a local model UI. This middleware does not trust forwarded headers or replace deployment-grade edge protection.
 
 The THTTP server defaults to a 10 MiB request-body limit. `thttp.WithMaxRequestBodyBytes` changes it for a server, and `thttp/middleware.RequestBodyLimit` can be installed directly for a custom handler stack. The server cap is applied through `Handler` and `Do` before middleware and routes, including raw handlers; serving `Mux()` directly bypasses THTTP middleware, so wrap that handler explicitly. Typed routes report HTTP 413 for an overflow. Raw handlers must check body-read errors to return 413 for unknown-length/chunked overflow. The similarly named `thttp.WithMaxBodyBytes` option configures the separate standalone action adapter, not a server.
 

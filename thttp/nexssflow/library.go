@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -19,15 +20,17 @@ import (
 )
 
 type Config struct {
-	Addr              string        `nflow:"addr" default:":8080"`
-	ReadHeaderTimeout time.Duration `nflow:"read_header_timeout" default:"5s"`
-	ReadTimeout       time.Duration `nflow:"read_timeout" default:"30s"`
-	WriteTimeout      time.Duration `nflow:"write_timeout" default:"30s"`
-	IdleTimeout       time.Duration `nflow:"idle_timeout" default:"120s"`
-	SecurityHeaders   bool          `nflow:"security_headers" default:"false"`
-	MaxBodyBytes      int64         `nflow:"max_body_bytes"`
-	RateLimitRPS      float64       `nflow:"rate_limit_rps"`
-	RateLimitBurst    int           `nflow:"rate_limit_burst"`
+	Addr                  string        `nflow:"addr" default:":8080"`
+	ReadHeaderTimeout     time.Duration `nflow:"read_header_timeout" default:"5s"`
+	ReadTimeout           time.Duration `nflow:"read_timeout" default:"30s"`
+	WriteTimeout          time.Duration `nflow:"write_timeout" default:"30s"`
+	IdleTimeout           time.Duration `nflow:"idle_timeout" default:"120s"`
+	SecurityHeaders       bool          `nflow:"security_headers" default:"false"`
+	LoopbackOnly          bool          `nflow:"loopback_only" default:"false"`
+	MaxBodyBytes          int64         `nflow:"max_body_bytes"`
+	MaxConcurrentRequests int           `nflow:"max_concurrent_requests"`
+	RateLimitRPS          float64       `nflow:"rate_limit_rps"`
+	RateLimitBurst        int           `nflow:"rate_limit_burst"`
 }
 
 // RuntimeConfig overrides bundle-level server settings for one listener
@@ -77,6 +80,12 @@ func configuredRateLimit(requestsPerSecond float64, burst int) (func(http.Handle
 }
 
 func newListenerServer(cfg Config, runtime RuntimeConfig, addr string) (*thttp.Transport, error) {
+	if cfg.LoopbackOnly && !isLoopbackListenAddress(addr) {
+		return nil, errors.New("thttp.listen: loopback_only requires an explicit loopback bind address")
+	}
+	if cfg.MaxConcurrentRequests < 0 {
+		return nil, errors.New("thttp.listen: max_concurrent_requests must not be negative")
+	}
 	readHeaderTimeout := cfg.ReadHeaderTimeout
 	if runtime.ReadHeaderTimeout > 0 {
 		readHeaderTimeout = runtime.ReadHeaderTimeout
@@ -122,6 +131,12 @@ func newListenerServer(cfg Config, runtime RuntimeConfig, addr string) (*thttp.T
 	if cfg.SecurityHeaders {
 		server.Use(httpmiddleware.SecurityHeaders, httpmiddleware.NoStoreAPIResponses)
 	}
+	if cfg.LoopbackOnly {
+		server.Use(httpmiddleware.LoopbackOnly)
+	}
+	if cfg.MaxConcurrentRequests > 0 {
+		server.Use(httpmiddleware.MaxConcurrentRequests(cfg.MaxConcurrentRequests))
+	}
 	rateLimit, err := configuredRateLimit(rateLimitRPS, rateLimitBurst)
 	if err != nil {
 		return nil, fmt.Errorf("thttp.listen: configure request rate limit: %w", err)
@@ -129,6 +144,18 @@ func newListenerServer(cfg Config, runtime RuntimeConfig, addr string) (*thttp.T
 	server.Use(rateLimit)
 	server.Use(runtime.Middlewares...)
 	return server, nil
+}
+
+func isLoopbackListenAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func init() {
@@ -145,31 +172,32 @@ func Bundle(opts map[string]string) compiler.Bundle {
 		Libraries: []action.Library{Library(cfg)},
 		Modifiers: []compiler.Modifier{
 			compiler.String("route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
-				method := http.MethodPost
-				path := raw
-				if sp := strings.IndexByte(raw, ' '); sp > 0 {
-					method = strings.ToUpper(strings.TrimSpace(raw[:sp]))
-					path = strings.TrimSpace(raw[sp+1:])
-				}
-				if path == "" {
-					path = "/"
-				}
+				method, path := parseRoutePattern(raw, http.MethodPost)
 				return b.Route(thttp.HTTPRoute{Method: method, Path: path})
 			}),
 			compiler.String("raw_route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
-				method := http.MethodPost
-				path := raw
-				if sp := strings.IndexByte(raw, ' '); sp > 0 {
-					method = strings.ToUpper(strings.TrimSpace(raw[:sp]))
-					path = strings.TrimSpace(raw[sp+1:])
-				}
-				if path == "" {
-					path = "/"
-				}
+				method, path := parseRoutePattern(raw, http.MethodPost)
 				return b.Route(thttp.RawRoute(method, path))
+			}),
+			compiler.String("stream_route", func(b *action.Builder[any, any], raw string) *action.Builder[any, any] {
+				method, path := parseRoutePattern(raw, http.MethodPost)
+				return b.Route(thttp.StreamRoute(method, path))
 			}),
 		},
 	}
+}
+
+func parseRoutePattern(raw, defaultMethod string) (method, path string) {
+	method = defaultMethod
+	path = raw
+	if separator := strings.IndexByte(raw, ' '); separator > 0 {
+		method = strings.ToUpper(strings.TrimSpace(raw[:separator]))
+		path = strings.TrimSpace(raw[separator+1:])
+	}
+	if path == "" {
+		path = "/"
+	}
+	return method, path
 }
 
 func Library(cfg Config) action.Library {
@@ -177,6 +205,7 @@ func Library(cfg Config) action.Library {
 		Name: "transport.thttp",
 		Actions: []action.AnyAction{
 			listenTriggerAction(cfg),
+			thttp.StaticAction(),
 		},
 	}
 }

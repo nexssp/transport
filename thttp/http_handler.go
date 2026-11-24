@@ -20,6 +20,7 @@ type handlerMode uint8
 const (
 	modeTyped handlerMode = iota
 	modeRaw
+	modeStream
 )
 
 //nolint:gocyclo // HTTP handler branches mirror request lifecycle and preserve existing codec behavior.
@@ -49,6 +50,11 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta, mode ha
 		}
 		if mode == modeRaw {
 			ctx = WithRawHTTPRequest(ctx, request.WithContext(ctx))
+		}
+		var streamWriter *httpStreamEventWriter
+		if mode == modeStream {
+			streamWriter = newHTTPStreamEventWriter(writer)
+			ctx = WithStreamEventWriter(ctx, streamWriter)
 		}
 
 		result, err := ex.ExecuteDecoded(ctx, func(value any) error {
@@ -97,6 +103,13 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta, mode ha
 			return decodeRequestWithMediaType(request, value, t.codec, t.maxBodyBytes, mediaType)
 		})
 		if err != nil {
+			if mode == modeStream {
+				publicErr := xerr.From(err).Public(requestID)
+				if writeErr := streamWriter.WriteEvent(ctx, StreamEvent{Type: "error", Error: publicErr}); writeErr != nil {
+					slog.DebugContext(ctx, "thttp: stream error event could not be written", "error", writeErr, "action", actionName(meta), "request_id", requestID)
+				}
+				return
+			}
 			if mode == modeRaw {
 				slog.ErrorContext(ctx, "thttp: raw HTTP action failed", "error", err, "action", actionName(meta), "request_id", requestID)
 				http.Error(writer, "internal server error", http.StatusInternalServerError)
@@ -112,6 +125,12 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta, mode ha
 		if mode == modeRaw {
 			tracked := &trackedResponseWriter{ResponseWriter: writer}
 			writeRawHTTPResponse(ctx, tracked, result, actionName(meta))
+			return
+		}
+		if mode == modeStream {
+			if writeErr := streamWriter.WriteEvent(ctx, StreamEvent{Type: "done", Result: result}); writeErr != nil {
+				slog.DebugContext(ctx, "thttp: stream completion event could not be written", "error", writeErr, "action", actionName(meta), "request_id", requestID)
+			}
 			return
 		}
 

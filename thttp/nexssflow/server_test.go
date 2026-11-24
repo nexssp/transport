@@ -1,6 +1,7 @@
 package nexssflow_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"github.com/nexssp/flow/extensions/runtime"
 	"github.com/nexssp/flow/runner"
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xerr"
 	"github.com/nexssp/kernel/xtest/ktest"
 
 	"github.com/nexssp/transport/thttp"
@@ -202,4 +204,164 @@ thttp.listen
 	case <-time.After(2 * time.Second):
 		t.Fatal("server failed to shutdown within timeout")
 	}
+}
+
+func TestHTTPServer_NFlowStreamRouteFlushesAndCompletes(t *testing.T) {
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	ktest.RequireNoError(t, err)
+	addr := listener.Addr().String()
+	ktest.RequireNoError(t, listener.Close())
+
+	tokenEmitted := make(chan struct{})
+	releaseStream := make(chan struct{})
+	streamAction := action.New("fixture.stream", func(ctx context.Context, _ any) (map[string]any, error) {
+		writer, ok := thttp.StreamEventWriterFromContext(ctx)
+		if !ok {
+			return nil, errors.New("request stream writer is missing")
+		}
+		if err := writer.WriteEvent(ctx, thttp.StreamEvent{Type: "token.delta", Delta: "Hello"}); err != nil {
+			return nil, err
+		}
+		close(tokenEmitted)
+		select {
+		case <-releaseStream:
+			return map[string]any{"answer": "Hello, Mercury3"}, nil
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}).Build()
+	errorAction := action.New("fixture.failure", func(context.Context, any) (any, error) {
+		return nil, xerr.BadRequest("fixture rejected input")
+	}).Build()
+	fixtureBundle := compiler.Bundle{
+		ID:        "stream-fixture",
+		Libraries: []action.Library{{Name: "fixture", Actions: []action.AnyAction{streamAction, errorAction}}},
+	}
+	source := `
+@pipeline health:route="GET /health"
+  { status: "up" }
+@end
+
+@pipeline stream:stream_route="POST /stream"
+  fixture.stream
+@end
+
+@pipeline failure:stream_route="POST /failure"
+  fixture.failure
+@end
+
+thttp.listen
+`
+	bundles := []compiler.Bundle{
+		runtime.Bundle(nil),
+		pipeline.Bundle(nil),
+		projection.Bundle(nil),
+		fixtureBundle,
+		nexssflow.Bundle(map[string]string{"addr": addr, "max_body_bytes": "4096"}),
+	}
+	cfg, err := runner.BuildConfig(bundles)
+	ktest.RequireNoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverDone := make(chan error, 1)
+	go func() {
+		_, runErr := runner.Execute(ctx, cfg, source, "stream_route_test.nflow", nil)
+		serverDone <- runErr
+	}()
+	defer func() {
+		select {
+		case <-releaseStream:
+		default:
+			close(releaseStream)
+		}
+		cancel()
+		select {
+		case runErr := <-serverDone:
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				t.Errorf("server exited with error: %v", runErr)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("server failed to shut down")
+		}
+	}()
+
+	client := &http.Client{Timeout: 4 * time.Second}
+	defer client.CloseIdleConnections()
+	healthURL := "http://" + addr + "/health"
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case runErr := <-serverDone:
+			t.Fatalf("server exited before readiness: %v", runErr)
+		default:
+		}
+		request, requestErr := http.NewRequestWithContext(t.Context(), http.MethodGet, healthURL, http.NoBody)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		response, requestErr := client.Do(request)
+		if requestErr == nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+"/stream", bytes.NewBufferString(`{"message":"hello"}`))
+	ktest.RequireNoError(t, err)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	ktest.RequireNoError(t, err)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("stream response = %d %q", response.StatusCode, response.Header.Get("Content-Type"))
+	}
+	reader := bufio.NewReader(response.Body)
+	firstLine := make(chan struct {
+		line string
+		err  error
+	}, 1)
+	go func() {
+		line, readErr := reader.ReadString('\n')
+		firstLine <- struct {
+			line string
+			err  error
+		}{line: line, err: readErr}
+	}()
+	select {
+	case first := <-firstLine:
+		ktest.RequireNoError(t, first.err)
+		var event thttp.StreamEvent
+		ktest.RequireNoError(t, json.Unmarshal([]byte(first.line), &event))
+		ktest.RequireEqual(t, event.Type, "token.delta")
+		ktest.RequireEqual(t, event.Delta, "Hello")
+	case <-time.After(time.Second):
+		t.Fatal("first token event was not flushed while the action was still running")
+	}
+	close(releaseStream)
+	finalLine, err := reader.ReadString('\n')
+	ktest.RequireNoError(t, err)
+	var finalEvent map[string]any
+	ktest.RequireNoError(t, json.Unmarshal([]byte(finalLine), &finalEvent))
+	ktest.RequireEqual(t, finalEvent["type"], "done")
+	result, ok := finalEvent["result"].(map[string]any)
+	ktest.RequireCondition(t, ok, "final event = %#v, want result object", finalEvent)
+	ktest.RequireEqual(t, result["answer"], "Hello, Mercury3")
+
+	failureRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "http://"+addr+"/failure", bytes.NewBufferString(`{}`))
+	ktest.RequireNoError(t, err)
+	failureRequest.Header.Set("Content-Type", "application/json")
+	failureResponse, err := client.Do(failureRequest)
+	ktest.RequireNoError(t, err)
+	failureBody, err := io.ReadAll(failureResponse.Body)
+	ktest.RequireNoError(t, err)
+	ktest.RequireNoError(t, failureResponse.Body.Close())
+	var errorEvent map[string]any
+	ktest.RequireNoError(t, json.Unmarshal(bytes.TrimSpace(failureBody), &errorEvent))
+	ktest.RequireEqual(t, errorEvent["type"], "error")
+	ktest.RequireCondition(t, errorEvent["error"] != nil, "error event = %#v, want a public error", errorEvent)
 }

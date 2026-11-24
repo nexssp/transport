@@ -22,8 +22,13 @@ func validateBindings(actions []action.AnyAction) {
 				}
 				continue
 			}
+			if _, ok := b.(NDJSONRoute); ok && meta != nil && meta.Idempotency.Enabled {
+				panic(fmt.Sprintf("thttp: action %q cannot combine :idempotent with a streaming route; stream responses are not cached", meta.Name))
+			}
 			if _, ok := b.(HTTPRoute); !ok {
-				continue
+				if _, stream := b.(NDJSONRoute); !stream {
+					continue
+				}
 			}
 			typed, ok := act.(action.TypedPayload)
 			if !ok {
