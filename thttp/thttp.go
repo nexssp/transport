@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/nexssp/flow/compiler/contracts"
+	flowevents "github.com/nexssp/flow/extensions/events"
 	"github.com/nexssp/kernel/action"
+	"github.com/nexssp/kernel/xctx"
 
 	"github.com/nexssp/transport"
 	"github.com/nexssp/transport/codec"
@@ -21,6 +23,8 @@ import (
 var _ transport.Transport = (*Transport)(nil)
 
 type Option func(*Transport)
+
+const listenerReadyPublishTimeout = 5 * time.Second
 
 type Transport struct {
 	addr              string
@@ -219,6 +223,18 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		return nil, err
 	}
 	contracts.SignalReady(ctx)
+	if pub, ok := xctx.EventPublisherFrom(ctx); ok && pub != nil {
+		// PublishEvent is synchronous: implementations must honor this
+		// deadline because Go cannot preempt a publisher that ignores ctx.
+		publishCtx, cancelPublish := context.WithTimeout(ctx, listenerReadyPublishTimeout)
+		err := flowevents.PublishFromBundle(publishCtx, "thttp", "events.listener_ready", &ListenerReadyEvent{
+			BindAddress: listener.Addr().String(),
+		})
+		cancelPublish()
+		if err != nil {
+			xctx.AddTrace(ctx, fmt.Sprintf("event_emit_failed:events.listener_ready: %v", err))
+		}
+	}
 
 	select {
 	case err := <-serveErr:

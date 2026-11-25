@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -183,6 +184,14 @@ func Bundle(opts map[string]string) compiler.Bundle {
 				method, path := parseRoutePattern(raw, http.MethodPost)
 				return b.Route(thttp.StreamRoute(method, path))
 			}),
+		},
+		Events: []compiler.EventSpec{
+			{
+				Name:        "thttp.events.listener_ready",
+				Subject:     "events.listener_ready",
+				Description: "Emitted when the HTTP listener is ready.",
+				PayloadType: reflect.TypeFor[thttp.ListenerReadyEvent](),
+			},
 		},
 	}
 }
