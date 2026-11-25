@@ -28,6 +28,8 @@ const listenerReadyPublishTimeout = 5 * time.Second
 
 type Transport struct {
 	addr              string
+	serviceID         string
+	advertisedURL     string
 	mux               *http.ServeMux
 	routes            map[string]*pathDispatcher
 	server            *http.Server
@@ -92,6 +94,16 @@ func WithBroadcaster(b StreamBroadcaster) Option {
 		if b != nil {
 			t.broadcaster = b
 		}
+	}
+}
+
+// WithListenerReadyMetadata sets the service identity and externally advertised
+// URL included in the listener-ready event. BindAddress is always taken from the
+// operating system after the listener has successfully bound.
+func WithListenerReadyMetadata(serviceID, advertisedURL string) Option {
+	return func(t *Transport) {
+		t.serviceID = serviceID
+		t.advertisedURL = advertisedURL
 	}
 }
 
@@ -222,19 +234,23 @@ func (t *Transport) Do(ctx context.Context, _ any) (any, error) {
 		<-serveDone
 		return nil, err
 	}
-	contracts.SignalReady(ctx)
 	if pub, ok := xctx.EventPublisherFrom(ctx); ok && pub != nil {
 		// PublishEvent is synchronous: implementations must honor this
 		// deadline because Go cannot preempt a publisher that ignores ctx.
 		publishCtx, cancelPublish := context.WithTimeout(ctx, listenerReadyPublishTimeout)
 		err := flowevents.PublishFromBundle(publishCtx, "thttp", "events.listener_ready", &ListenerReadyEvent{
-			BindAddress: listener.Addr().String(),
+			ServiceID:     t.serviceID,
+			AdvertisedURL: t.advertisedURL,
+			BindAddress:   listener.Addr().String(),
 		})
 		cancelPublish()
 		if err != nil {
 			xctx.AddTrace(ctx, fmt.Sprintf("event_emit_failed:events.listener_ready: %v", err))
 		}
 	}
+	// Flow releases service dependents as soon as SignalReady closes the barrier.
+	// Publish synchronously first so observers finish before dependent services start.
+	contracts.SignalReady(ctx)
 
 	select {
 	case err := <-serveErr:

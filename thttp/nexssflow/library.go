@@ -22,6 +22,8 @@ import (
 
 type Config struct {
 	Addr                  string        `nflow:"addr" default:":8080"`
+	ServiceID             string        `nflow:"service_id"`
+	AdvertisedURL         string        `nflow:"advertised_url"`
 	ReadHeaderTimeout     time.Duration `nflow:"read_header_timeout" default:"5s"`
 	ReadTimeout           time.Duration `nflow:"read_timeout" default:"30s"`
 	WriteTimeout          time.Duration `nflow:"write_timeout" default:"30s"`
@@ -120,6 +122,7 @@ func newListenerServer(cfg Config, runtime RuntimeConfig, addr string) (*thttp.T
 	}
 
 	options := []thttp.Option{
+		thttp.WithListenerReadyMetadata(cfg.ServiceID, cfg.AdvertisedURL),
 		thttp.WithReadHeaderTimeout(readHeaderTimeout),
 		thttp.WithReadTimeout(readTimeout),
 		thttp.WithWriteTimeout(writeTimeout),

@@ -78,7 +78,7 @@ func TestDoPublishesListenerReadyWithActualEphemeralAddress(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		_, err := New("127.0.0.1:0").Do(ctx, nil)
+		_, err := New("127.0.0.1:0", WithListenerReadyMetadata("test-service", "https://chat.example.test")).Do(ctx, nil)
 		done <- err
 	}()
 	waitForReady(t, signal)
@@ -95,6 +95,9 @@ func TestDoPublishesListenerReadyWithActualEphemeralAddress(t *testing.T) {
 	if !ok {
 		t.Fatalf("payload type = %T, want *thttp.ListenerReadyEvent", payload)
 	}
+	if event.ServiceID != "test-service" || event.AdvertisedURL != "https://chat.example.test" {
+		t.Fatalf("listener-ready metadata = (%q, %q), want configured service and URL", event.ServiceID, event.AdvertisedURL)
+	}
 	if event.BindAddress == "127.0.0.1:0" || event.BindAddress == "" {
 		t.Fatalf("BindAddress = %q, want actual bound address", event.BindAddress)
 	}
@@ -106,12 +109,13 @@ func TestDoPublishesListenerReadyWithActualEphemeralAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encoded) != `{"bind_address":"`+event.BindAddress+`"}` {
-		t.Fatalf("JSON = %s, want bind_address only", encoded)
+	wantJSON := `{"service_id":"test-service","advertised_url":"https://chat.example.test","bind_address":"` + event.BindAddress + `"}`
+	if string(encoded) != wantJSON {
+		t.Fatalf("JSON = %s, want %s", encoded, wantJSON)
 	}
 }
 
-func TestDoPublishesOnlyAfterReadySignal(t *testing.T) {
+func TestDoPublishesBeforeReadySignal(t *testing.T) {
 	release := make(chan struct{})
 	signal := contracts.NewReadySignal()
 	publisher := &listenerReadyPublisher{started: make(chan struct{}), release: release, signal: signal}
@@ -125,15 +129,21 @@ func TestDoPublishesOnlyAfterReadySignal(t *testing.T) {
 		_, err := New("127.0.0.1:0").Do(ctx, nil)
 		done <- err
 	}()
-	waitForReady(t, signal)
 	select {
 	case <-publisher.started:
 	case <-time.After(3 * time.Second):
-		t.Fatal("listener-ready event was not published after readiness")
+		t.Fatal("listener-ready event was not published before readiness")
 	}
-	if !publisher.wasReadyAtPublish() {
-		t.Fatal("listener-ready event was published before the ReadySignal was marked")
+	if publisher.wasReadyAtPublish() {
+		t.Fatal("listener-ready event was published after the ReadySignal was marked")
 	}
+	select {
+	case <-signal.Done():
+		t.Fatal("ReadySignal closed while listener-ready publication was blocked")
+	default:
+	}
+	close(release)
+	waitForReady(t, signal)
 	cancel()
 	select {
 	case err := <-done:
@@ -192,7 +202,11 @@ func TestDoTreatsListenerReadyPublisherErrorAsBestEffort(t *testing.T) {
 }
 
 func TestListenerReadyEventJSONShape(t *testing.T) {
-	encoded, err := json.Marshal(ListenerReadyEvent{BindAddress: "127.0.0.1:12345"})
+	encoded, err := json.Marshal(ListenerReadyEvent{
+		ServiceID:     "test-service",
+		AdvertisedURL: "https://chat.example.test",
+		BindAddress:   "127.0.0.1:12345",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +214,11 @@ func TestListenerReadyEventJSONShape(t *testing.T) {
 	if err := json.Unmarshal(encoded, &fields); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]any{"bind_address": "127.0.0.1:12345"}
+	want := map[string]any{
+		"service_id":     "test-service",
+		"advertised_url": "https://chat.example.test",
+		"bind_address":   "127.0.0.1:12345",
+	}
 	if !reflect.DeepEqual(fields, want) {
 		t.Fatalf("JSON fields = %#v, want %#v", fields, want)
 	}
