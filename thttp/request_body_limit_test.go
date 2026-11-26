@@ -45,3 +45,41 @@ func TestServerRequestBodyLimitReports413ForChunkedTypedRequest(t *testing.T) {
 		t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusRequestEntityTooLarge, response.Body.String())
 	}
 }
+
+func TestServerRequestBodyLimitUsesConfiguredStatus(t *testing.T) {
+	t.Run("declared body", func(t *testing.T) {
+		called := false
+		server := New("", WithMaxRequestBodyBytes(4), WithRequestBodyLimitStatus(http.StatusBadRequest))
+		server.Mux().Handle("POST /raw", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			called = true
+		}))
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/raw", strings.NewReader("12345"))
+		response := httptest.NewRecorder()
+
+		server.Handler().ServeHTTP(response, request)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+		}
+		if called {
+			t.Fatal("raw handler ran for an oversized declared body")
+		}
+	})
+
+	t.Run("MaxBytesError", func(t *testing.T) {
+		server := New("", WithMaxRequestBodyBytes(4), WithRequestBodyLimitStatus(http.StatusBadRequest))
+		act := action.New("typed.body", func(context.Context, map[string]any) (struct{}, error) {
+			return struct{}{}, nil
+		}).Route(POST("/typed")).Build()
+		server.Mount([]action.AnyAction{act})
+
+		request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/typed", strings.NewReader(`{"x":1}`))
+		request.ContentLength = -1
+		response := httptest.NewRecorder()
+		server.Handler().ServeHTTP(response, request)
+
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d; body=%q", response.Code, http.StatusBadRequest, response.Body.String())
+		}
+	})
+}

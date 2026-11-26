@@ -38,6 +38,7 @@ type Transport struct {
 	idemStore         action.IdempotencyStore
 	codec             codec.Codec
 	maxBodyBytes      int64
+	bodyLimitStatus   int
 	maxIdemRespBytes  int
 	readHeaderTimeout time.Duration
 	readTimeout       time.Duration
@@ -60,6 +61,7 @@ func New(addr string, opts ...Option) *Transport {
 		idemStore:         action.NewMemoryIdempotencyStore(0),
 		codec:             codec.Default,
 		maxBodyBytes:      10 << 20,
+		bodyLimitStatus:   http.StatusRequestEntityTooLarge,
 		maxIdemRespBytes:  defaultMaxIdempotentResponseBytes,
 		readHeaderTimeout: 5 * time.Second,
 		readTimeout:       15 * time.Second,
@@ -122,6 +124,18 @@ func WithMaxRequestBodyBytes(n int64) Option {
 	return func(t *Transport) {
 		if n > 0 {
 			t.maxBodyBytes = n
+		}
+	}
+}
+
+// WithRequestBodyLimitStatus sets the status used for oversized declared bodies
+// and typed-handler MaxBytesError responses. Raw handlers remain responsible for
+// mapping their own body-read errors. It defaults to 413; values outside 400–599
+// are ignored.
+func WithRequestBodyLimitStatus(status int) Option {
+	return func(t *Transport) {
+		if status >= http.StatusBadRequest && status <= 599 {
+			t.bodyLimitStatus = status
 		}
 	}
 }
@@ -195,7 +209,7 @@ func (t *Transport) Handler() http.Handler {
 	for _, m := range slices.Backward(t.mdws) {
 		h = m(h)
 	}
-	h = httpmiddleware.RequestBodyLimit(t.maxBodyBytes)(h)
+	h = httpmiddleware.RequestBodyLimit(t.maxBodyBytes, t.bodyLimitStatus)(h)
 	return RequestIdentity(h)
 }
 

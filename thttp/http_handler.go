@@ -118,7 +118,7 @@ func (t *Transport) httpHandler(ex action.Executable, meta *action.Meta, mode ha
 			if unsupported, ok := errors.AsType[*unsupportedContentTypeError](err); ok {
 				err = &xerr.AppError{Kind: xerr.KindUnsupportedMediaType, Message: unsupported.Error()}
 			}
-			writeActionError(writer, request, t.codec, err, requestID, 0)
+			writeActionError(writer, request, t.codec, err, requestID, 0, t.bodyLimitStatus)
 			return
 		}
 
@@ -192,14 +192,14 @@ func writeRawHTTPResponse(ctx context.Context, writer http.ResponseWriter, resul
 	}
 }
 
-func writeActionError(writer http.ResponseWriter, request *http.Request, responseCodec codec.Codec, err error, requestID string, statusOverride int) {
+func writeActionError(writer http.ResponseWriter, request *http.Request, responseCodec codec.Codec, err error, requestID string, statusOverride, bodyLimitStatus int) {
 	if responseCodec == nil {
 		responseCodec = codec.Default
 	}
 	appErr := xerr.From(err)
 	status := transport.MapToHTTPStatus(appErr.Kind)
 	if maxBytesErr, ok := errors.AsType[*http.MaxBytesError](err); ok && maxBytesErr != nil {
-		status = http.StatusRequestEntityTooLarge
+		status = bodyLimitStatus
 	}
 	if statusOverride != 0 {
 		status = statusOverride
